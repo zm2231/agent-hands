@@ -8,20 +8,21 @@ export interface FocusTelemetry {
   targetBecameFrontmost: boolean;
   unrelatedFocusChanges: number;
   backgroundPreserved: boolean | null;
-  stop(): void;
 }
 
 export function startFocusTelemetry(
   targetBundleId: string | null
-): { telemetry: Promise<FocusTelemetry>; stop: () => void } {
+): { finish(): Promise<FocusTelemetry>; stop: () => void } {
   let stopped = false;
   let intervalHandle: ReturnType<typeof setInterval> | null = null;
   const samples: string[] = [];
   let beforeFrontmost: string | null = null;
+  let beforeReady = false;
 
   const ready = getFrontmostBundleId().then((bid) => {
     beforeFrontmost = bid;
-  });
+    beforeReady = true;
+  }).catch(() => { beforeReady = true; });
 
   intervalHandle = setInterval(async () => {
     if (stopped) return;
@@ -37,11 +38,15 @@ export function startFocusTelemetry(
     }
   }
 
-  const telemetry = (async (): Promise<FocusTelemetry> => {
-    await ready;
+  async function finish(): Promise<FocusTelemetry> {
+    stop();
+    if (!beforeReady) await ready;
+
+    // Take the final sample AFTER the operation completes.
     const afterFrontmost = await getFrontmostBundleId().catch(() => null);
+
     const targetBecameFrontmost = targetBundleId
-      ? samples.includes(targetBundleId)
+      ? samples.includes(targetBundleId) || afterFrontmost === targetBundleId
       : false;
 
     const uniqueApps = new Set(samples);
@@ -59,9 +64,8 @@ export function startFocusTelemetry(
       targetBecameFrontmost,
       unrelatedFocusChanges,
       backgroundPreserved,
-      stop,
     };
-  })();
+  }
 
-  return { telemetry, stop };
+  return { finish, stop };
 }

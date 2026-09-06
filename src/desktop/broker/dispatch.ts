@@ -158,6 +158,19 @@ export async function brokerDispatch(
       }
     }
 
+    // Wire abort signal to kill the process.
+    if (options.signal) {
+      options.signal.addEventListener("abort", () => {
+        if (proc && !proc.killed) {
+          try {
+            if (proc.pid) process.kill(-proc.pid, "SIGKILL");
+          } catch {
+            try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+          }
+        }
+      }, { once: true });
+    }
+
     // 1. initialize
     await request("initialize", {
       clientInfo: { name: "agent-hands", title: "agent-hands", version: "0.1.0" },
@@ -197,6 +210,23 @@ export async function brokerDispatch(
       detail: "toolsAndAuthOnly",
     }, 45_000);
 
+    // Validate the inventory: must contain computer-use server with expected tools.
+    const inventoryData = (inventoryResult.data ?? inventoryResult.servers ?? []) as any[];
+    const cuServer = inventoryData.find((s: any) => s.name === "computer-use");
+    if (!cuServer) {
+      throw new Error("Inventory missing computer-use server.");
+    }
+    const expectedMethods = [
+      "click", "drag", "get_app_state", "list_apps", "perform_secondary_action",
+      "press_key", "scroll", "select_text", "set_value", "type_text",
+    ];
+    const toolNames = ((cuServer.tools ?? []) as any[]).map((t: any) => t.name).sort();
+    if (JSON.stringify(toolNames) !== JSON.stringify(expectedMethods)) {
+      throw new Error(
+        `Inventory tool mismatch. Expected: ${expectedMethods.join(",")}; got: ${toolNames.join(",")}`
+      );
+    }
+
     // 4b. mcpServer/tool/call
     const callResult = await request("mcpServer/tool/call", {
       threadId,
@@ -216,7 +246,7 @@ export async function brokerDispatch(
 
     // Size check.
     const serialized = JSON.stringify({ content, structuredContent: callResult });
-    if (serialized.length > MAX_RESULT_BYTES) {
+    if (Buffer.byteLength(serialized) > MAX_RESULT_BYTES) {
       throw new Error("Result exceeds 25 MB limit.");
     }
 
@@ -228,7 +258,7 @@ export async function brokerDispatch(
       ephemeralThread: true,
     };
   } finally {
-    // Teardown: kill the process tree.
+    // Teardown: kill the process tree and await exit.
     if (proc && !proc.killed) {
       try {
         if (proc.pid) process.kill(-proc.pid, "SIGKILL");
@@ -239,6 +269,11 @@ export async function brokerDispatch(
           // Already dead.
         }
       }
+      // Await process exit before removing temp tree.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        proc!.on("close", () => { clearTimeout(timer); resolve(); });
+      });
     }
     // Clean up temp.
     await rm(tempRoot, { recursive: true, force: true }).catch(() => {});
@@ -254,6 +289,14 @@ function createLineReader(proc: ChildProcess) {
 
   proc.stdout!.on("data", (chunk: Buffer) => {
     buffer += chunk.toString();
+    // Cap buffer while accumulating to prevent unbounded growth.
+    if (Buffer.byteLength(buffer) > MAX_LINE_BYTES && !buffer.includes("\n")) {
+      const err = new Error("App-server line exceeds 8 MB limit.");
+      for (const p of pending) p.reject(err);
+      pending.length = 0;
+      buffer = "";
+      return;
+    }
     drainLines();
   });
 
@@ -274,7 +317,7 @@ function createLineReader(proc: ChildProcess) {
     while ((idx = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 1);
-      if (line.length > MAX_LINE_BYTES) {
+      if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
         // Reject all pending.
         const err = new Error("App-server line exceeds 8 MB limit.");
         for (const p of pending) p.reject(err);

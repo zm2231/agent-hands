@@ -33,11 +33,20 @@ async function bundleIdFromPath(appPath: string): Promise<AppIdentity> {
   }
 }
 
+function escapeAppleScript(s: string): string {
+  // Reject control chars and backslashes; escape quotes.
+  if (/[\x00-\x1f\\]/.test(s)) {
+    throw new Error(`Unsafe characters in app identifier: ${s.slice(0, 60)}`);
+  }
+  return s.replace(/"/g, '\\"');
+}
+
 async function bundleIdFromIdentifier(identifier: string): Promise<AppIdentity> {
   try {
+    const safe = escapeAppleScript(identifier);
     const { stdout } = await execFileAsync("/usr/bin/osascript", [
       "-e",
-      `id of application id "${identifier}"`,
+      `id of application id "${safe}"`,
     ]);
     const bid = stdout.trim();
     if (BUNDLE_ID_RE.test(bid)) {
@@ -51,9 +60,10 @@ async function bundleIdFromIdentifier(identifier: string): Promise<AppIdentity> 
 
 async function bundleIdFromName(name: string): Promise<AppIdentity> {
   try {
+    const safe = escapeAppleScript(name);
     const { stdout } = await execFileAsync("/usr/bin/osascript", [
       "-e",
-      `id of application "${name}"`,
+      `id of application "${safe}"`,
     ]);
     const bid = stdout.trim();
     if (BUNDLE_ID_RE.test(bid)) {

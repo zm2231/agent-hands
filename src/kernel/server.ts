@@ -10,7 +10,6 @@ import type {
   SurfaceDescriptor,
   ToolResult,
   CallContext,
-  ContentBlock,
 } from "./types.js";
 import { sanitizeError } from "./sanitize.js";
 import { buildStatus } from "./status.js";
@@ -28,9 +27,16 @@ export function createServer(surfaces: SurfaceDescriptor[]): {
     { capabilities: { logging: {}, tools: {} } }
   );
 
-  // Build a tool-name -> surface index at registration time.
+  // Build a stable tool-name -> surface registry at construction time.
+  // This ensures call-tool works even if list-tools was never called.
   const toolOwner = new Map<string, SurfaceDescriptor>();
   const toolSchemas = new Map<string, Record<string, unknown>>();
+  for (const surface of surfaces) {
+    for (const tool of surface.tools) {
+      toolOwner.set(tool.name, surface);
+      toolSchemas.set(tool.name, tool.inputSchema);
+    }
+  }
 
   // list-tools: evaluate availability per call (components can be installed at runtime).
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -59,8 +65,6 @@ export function createServer(surfaces: SurfaceDescriptor[]): {
       if (!available) continue;
 
       for (const tool of surface.tools) {
-        toolOwner.set(tool.name, surface);
-        toolSchemas.set(tool.name, tool.inputSchema);
         tools.push({
           name: tool.name,
           description: tool.description,
@@ -73,7 +77,7 @@ export function createServer(surfaces: SurfaceDescriptor[]): {
     return { tools };
   });
 
-  // call-tool: route to the owning surface.
+  // call-tool: route to the owning surface, re-checking availability.
   server.setRequestHandler(CallToolRequestSchema, async (request, _extra) => {
     const { name, arguments: rawArgs } = request.params;
 
@@ -91,6 +95,20 @@ export function createServer(surfaces: SurfaceDescriptor[]): {
     if (!surface) {
       return {
         content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+        isError: true,
+      };
+    }
+
+    // Re-check availability at call time.
+    let available: boolean;
+    try {
+      available = await Promise.resolve(surface.isAvailable());
+    } catch {
+      available = false;
+    }
+    if (!available) {
+      return {
+        content: [{ type: "text" as const, text: `Tool "${name}" is not currently available (surface prerequisites not met).` }],
         isError: true,
       };
     }
@@ -115,7 +133,16 @@ export function createServer(surfaces: SurfaceDescriptor[]): {
     };
 
     try {
-      return await surface.handle(name, (rawArgs ?? {}) as Record<string, unknown>, ctx);
+      const result = await surface.handle(name, (rawArgs ?? {}) as Record<string, unknown>, ctx);
+      // Sanitize all text blocks in error results from surfaces.
+      if (result.isError && result.content) {
+        for (const block of result.content) {
+          if (block.type === "text" && block.text) {
+            block.text = sanitizeError(block.text);
+          }
+        }
+      }
+      return result;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       return {

@@ -135,6 +135,7 @@ export async function takeSnapshot(
 
     if (INTERACTIVE_ROLES.has(role) && backendDOMNodeId != null) {
       const id = nextElementId++;
+      // Element ref stored temporarily; pruned after windowing to only include visible elements.
       elementRefs.set(id, backendDOMNodeId);
       const parts = [`[${id}]`, cap(role, FIELD_CAPS.role)];
       if (name) parts.push(cap(name, FIELD_CAPS.elementName));
@@ -199,7 +200,28 @@ export async function takeSnapshot(
     elements.push(el);
   }
 
-  // Byte budget enforcement.
+  // Byte-truncate metadata fields by their JSON-serialized size (accounts for escaping).
+  function jsonByteCap(s: string, maxJsonBytes: number): string {
+    if (Buffer.byteLength(JSON.stringify(s), "utf8") <= maxJsonBytes) return s;
+    let lo = 0;
+    let hi = s.length;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (Buffer.byteLength(JSON.stringify(s.slice(0, mid)), "utf8") <= maxJsonBytes) lo = mid;
+      else hi = mid - 1;
+    }
+    return s.slice(0, lo);
+  }
+
+  // Reserve ~200 bytes for the envelope keys, then divide the rest among metadata.
+  const ENVELOPE_RESERVE = 200;
+  const META_BUDGET = OUTPUT_BUDGET_BYTES - ENVELOPE_RESERVE;
+  title = jsonByteCap(title, Math.min(2000, Math.floor(META_BUDGET * 0.1)));
+  url = jsonByteCap(url, Math.min(8000, Math.floor(META_BUDGET * 0.4)));
+  const cappedPattern = options.pattern
+    ? jsonByteCap(cap(options.pattern, FIELD_CAPS.pattern), Math.min(4000, Math.floor(META_BUDGET * 0.2)))
+    : undefined;
+
   const result: SnapshotResult = {
     ref_id: refId,
     title,
@@ -208,10 +230,10 @@ export async function takeSnapshot(
     content,
     elements,
   };
-  if (options.pattern) result.pattern = cap(options.pattern, FIELD_CAPS.pattern);
+  if (cappedPattern) result.pattern = cappedPattern;
 
   let serialized = JSON.stringify(result);
-  while (serialized.length > OUTPUT_BUDGET_BYTES && result.content.length > 0) {
+  while (Buffer.byteLength(serialized, "utf8") > OUTPUT_BUDGET_BYTES && result.content.length > 0) {
     const removed = result.content.pop()!;
     if (removed.element_id != null) {
       const idx = result.elements.findIndex((e) => e.id === removed.element_id);
@@ -222,8 +244,21 @@ export async function takeSnapshot(
     serialized = JSON.stringify(result);
   }
 
-  if (hasMore && !result.truncated) {
+  if (hasMore && !result.truncated && !result.next_lineno) {
     result.next_lineno = startIdx + windowed.length + 1;
+  }
+
+  // Rebuild the used set from the FINAL content (after budget truncation).
+  const finalUsedIds = new Set<number>();
+  for (const cl of result.content) {
+    if (cl.element_id != null) finalUsedIds.add(cl.element_id);
+  }
+
+  // Prune element refs to only those included in the final response.
+  for (const [id] of elementRefs) {
+    if (!finalUsedIds.has(id)) {
+      elementRefs.delete(id);
+    }
   }
 
   return result;

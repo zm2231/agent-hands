@@ -39,21 +39,13 @@ async function verifySignature(bin: string): Promise<void> {
     timeout: CODESIGN_TIMEOUT,
   });
 
-  // Team ID check.
-  const { stdout } = await execFileAsync(
-    "/usr/bin/codesign",
-    ["-dv", "--verbose=2", bin],
-    { timeout: CODESIGN_TIMEOUT }
-  );
-  // codesign -dv writes to stderr, but promisify captures both.
-  // Actually codesign -dv output goes to stderr. Let's capture stderr.
-  // Re-run capturing stderr.
+  // Team ID check. codesign -dv writes to stderr, so use callback form.
   const result = await new Promise<string>((resolve, reject) => {
-    const proc = require("node:child_process").execFile(
+    execFile(
       "/usr/bin/codesign",
       ["-dv", "--verbose=2", bin],
       { timeout: CODESIGN_TIMEOUT },
-      (err: Error | null, _stdout: string, stderr: string) => {
+      (err, _stdout, stderr) => {
         if (err) reject(err);
         else resolve(stderr);
       }

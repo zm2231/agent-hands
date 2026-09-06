@@ -52,7 +52,7 @@ async function clickById(
       objectId,
       functionDeclaration: `function() {
         const rect = this.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) return { error: "Element has zero size" };
+        if (rect.width === 0 || rect.height === 0) return { error: "Element has zero size" };
         const style = getComputedStyle(this);
         if (style.display === "none") return { error: "Element is display:none" };
         if (style.visibility === "hidden" || style.visibility === "collapse") return { error: "Element is hidden" };
@@ -90,7 +90,21 @@ async function clickBySelector(cdp: CDPClient, sessionId: string, selector: stri
       const el = els[0];
       el.scrollIntoView({block:"center",inline:"center"});
       const rect = el.getBoundingClientRect();
-      return { cx: rect.left + rect.width/2, cy: rect.top + rect.height/2, tag: el.tagName, text: (el.textContent||"").slice(0,50) };
+      if (rect.width === 0 || rect.height === 0) return { error: "Element has zero size" };
+      const style = getComputedStyle(el);
+      if (style.display === "none") return { error: "Element is display:none" };
+      if (style.visibility === "hidden" || style.visibility === "collapse") return { error: "Element is hidden" };
+      if (style.pointerEvents === "none") return { error: "Element has pointer-events:none" };
+      if (parseFloat(style.opacity) === 0) return { error: "Element has zero opacity" };
+      if (el.closest("[inert]")) return { error: "Element is inside [inert]" };
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") return { error: "Element is disabled" };
+      const cx = rect.left + rect.width/2;
+      const cy = rect.top + rect.height/2;
+      const hit = document.elementFromPoint(cx, cy);
+      if (hit && hit !== el && !el.contains(hit)) {
+        return { error: "Element center is covered by " + (hit.tagName || "another element") };
+      }
+      return { cx, cy, tag: el.tagName, text: (el.textContent||"").slice(0,50) };
     })()`,
     returnByValue: true,
   }, sessionId);

@@ -20,6 +20,7 @@ export async function executePipeline(
   let outcome = "ok";
   let lock: { release(): Promise<void> } | null = null;
   let focusStop: (() => void) | null = null;
+  let focusFinish: (() => Promise<import("./os/focus.js").FocusTelemetry>) | null = null;
 
   try {
     // Normalize press_key.
@@ -58,6 +59,7 @@ export async function executePipeline(
     // Start focus telemetry.
     const focus = startFocusTelemetry(bundleId);
     focusStop = focus.stop;
+    focusFinish = focus.finish;
 
     // Verify and dispatch through the broker.
     const components = await verifyBrokerComponents();
@@ -77,9 +79,8 @@ export async function executePipeline(
 
     outcome = result.isError ? "official_error" : "ok";
 
-    // Stop focus.
-    focusStop?.();
-    const telemetry = await focus.telemetry;
+    // Finish focus telemetry (takes final sample after dispatch).
+    const telemetry = await focusFinish!();
 
     // Build response.
     const details = {
@@ -123,7 +124,12 @@ export async function executePipeline(
       isError: result.isError,
     };
   } catch (e: unknown) {
-    focusStop?.();
+    // Finish focus telemetry even on error (takes final sample).
+    if (focusFinish) {
+      try { await focusFinish(); } catch { /* telemetry failure non-fatal */ }
+    } else {
+      focusStop?.();
+    }
     const msg = e instanceof Error ? e.message : String(e);
 
     // Audit the failure.

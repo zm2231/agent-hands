@@ -1,6 +1,6 @@
 // Screenshot and large-text artifact storage.
 
-import { mkdir, writeFile, readFile, unlink, stat } from "node:fs/promises";
+import { mkdir, writeFile, readFile, unlink, stat, lstat, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -10,15 +10,64 @@ const RESULT_TTL_MS = 3_600_000; // 1 hour
 const SCREENSHOT_TTL_MS = 86_400_000; // 24 hours
 
 let artifactDir: string | null = null;
+let lastCleanup = 0;
+const CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
 
 async function ensureArtifactDir(): Promise<string> {
   if (artifactDir) return artifactDir;
-  const base = process.env.XDG_RUNTIME_DIR
-    ? join(process.env.XDG_RUNTIME_DIR, "browser-tool")
-    : join(tmpdir(), `browser-tool-${process.getuid?.() ?? 0}`);
-  await mkdir(base, { recursive: true, mode: 0o700 });
+
+  let base: string;
+  if (process.env.XDG_RUNTIME_DIR) {
+    base = join(process.env.XDG_RUNTIME_DIR, "browser-tool");
+    await mkdir(base, { recursive: true, mode: 0o700 });
+  } else {
+    // Use mkdtemp for a unique, unpredictable directory under tmpdir.
+    const { mkdtemp: mkdtempAsync } = await import("node:fs/promises");
+    base = await mkdtempAsync(join(tmpdir(), "browser-tool-"));
+    await chmod(base, 0o700);
+  }
+
+  // Validate: must be a non-symlink directory owned by us with no group/other bits.
+  const s = await lstat(base);
+  if (!s.isDirectory()) throw new Error("Artifact directory is not a directory.");
+  if (s.isSymbolicLink()) throw new Error("Artifact directory is a symlink.");
+  const uid = process.getuid?.();
+  if (uid != null && s.uid !== uid) {
+    throw new Error("Artifact directory not owned by current user.");
+  }
+  const mode = s.mode & 0o777;
+  if (mode & 0o077) {
+    throw new Error(`Artifact directory has group/other permissions (${mode.toString(8)}).`);
+  }
+
   artifactDir = base;
   return base;
+}
+
+async function sweepExpired(): Promise<void> {
+  const now = Date.now();
+  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
+  lastCleanup = now;
+
+  const dir = artifactDir;
+  if (!dir) return;
+
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const files = await readdir(dir);
+    for (const file of files) {
+      const filepath = join(dir, file);
+      try {
+        const s = await stat(filepath);
+        const age = now - s.mtimeMs;
+        if (file.endsWith(".png") && age > SCREENSHOT_TTL_MS) {
+          await unlink(filepath).catch(() => {});
+        } else if (file.startsWith("result-") && file.endsWith(".txt") && age > RESULT_TTL_MS) {
+          await unlink(filepath).catch(() => {});
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* non-fatal */ }
 }
 
 function safeRef(refId: string): string {
@@ -31,6 +80,7 @@ export async function saveScreenshot(
   elementId?: number
 ): Promise<string> {
   const dir = await ensureArtifactDir();
+  sweepExpired().catch(() => {}); // Non-blocking cleanup.
   const parts = ["browser", safeRef(refId)];
   if (elementId != null) parts.push("element", String(elementId));
   parts.push(randomUUID());
@@ -49,6 +99,7 @@ export interface TextResult {
 }
 
 export async function storeText(text: string): Promise<TextResult> {
+  sweepExpired().catch(() => {}); // Non-blocking cleanup.
   const encoded = Buffer.from(JSON.stringify(text));
   if (encoded.length <= TEXT_BUDGET_BYTES) {
     return { inline: text, truncated: false };
@@ -84,6 +135,21 @@ export async function readResult(
     throw new Error(`Result handle not found: ${handle}. Re-run the original command.`);
   }
 
+  // Enforce TTL at read time.
+  try {
+    const s = await stat(filepath);
+    if (Date.now() - s.mtimeMs > RESULT_TTL_MS) {
+      await unlink(filepath).catch(() => {});
+      throw new Error(`Result handle expired: ${handle}. Re-run the original command.`);
+    }
+  } catch (e: unknown) {
+    if (e instanceof Error && e.message.includes("expired")) throw e;
+    // stat failure is non-fatal for read.
+  }
+
+  if (!Number.isFinite(offset) || offset < 0 || !Number.isInteger(offset)) {
+    throw new Error("offset must be a non-negative integer.");
+  }
   const remaining = text.slice(offset);
   const chunkEnd = findJsonSafeCut(remaining, TEXT_BUDGET_BYTES);
   const chunk = remaining.slice(0, chunkEnd);

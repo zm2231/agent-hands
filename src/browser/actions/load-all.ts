@@ -10,7 +10,10 @@ export async function loadAllAction(
   args: Record<string, unknown>
 ): Promise<string> {
   const selector = args.selector as string;
-  const intervalMs = (args.interval_ms as number) ?? 1500;
+  const rawInterval = args.interval_ms as number | undefined;
+  const intervalMs = rawInterval != null
+    ? Math.max(0, Math.min(60_000, Math.floor(rawInterval)))
+    : 1500;
   const deadline = Date.now() + DEADLINE_MS;
   let clicks = 0;
 

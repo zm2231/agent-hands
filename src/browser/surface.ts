@@ -51,7 +51,12 @@ async function ensureRoot(): Promise<CDPClient> {
   if (rootCDP) return rootCDP;
   const wsUrl = await discoverEndpoint();
   rootCDP = await createCDPClient(wsUrl);
-  rootCDP.on("close", () => { rootCDP = null; });
+  rootCDP.on("close", () => {
+    rootCDP = null;
+    // Close all stale bridges on root disconnect.
+    for (const b of bridges.values()) b.close();
+    bridges.clear();
+  });
   return rootCDP;
 }
 
@@ -80,39 +85,56 @@ function resolveTargetId(refId: string, pages: Array<{ targetId: string }>): str
   return matches[0].targetId;
 }
 
+const bridgeInflight = new Map<string, Promise<TabBridge>>();
+
 async function ensureBridge(cdp: CDPClient, targetId: string): Promise<TabBridge> {
-  let bridge = bridges.get(targetId);
-  if (bridge && !bridge.isClosed) {
-    bridge.resetIdle();
-    return bridge;
+  const existing = bridges.get(targetId);
+  if (existing && !existing.isClosed) {
+    existing.resetIdle();
+    return existing;
   }
 
-  const result = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-  const sessionId = result.sessionId as string;
+  // If there's an in-flight creation for this target, wait for it.
+  const inflight = bridgeInflight.get(targetId);
+  if (inflight) return inflight;
 
-  bridge = new TabBridge(targetId, sessionId, cdp, () => {
-    bridges.delete(targetId);
-  });
+  const creating = (async () => {
+    const result = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const sessionId = result.sessionId as string;
 
-  // Listen for target destruction.
-  const destroyHandler = (params: Record<string, unknown>) => {
-    if (params.targetId === targetId) {
-      bridge!.close();
-      cdp.off("Target.targetDestroyed", destroyHandler);
-    }
-  };
-  cdp.on("Target.targetDestroyed", destroyHandler);
+    const bridge = new TabBridge(targetId, sessionId, cdp, () => {
+      // Only delete if this bridge is still the current one.
+      if (bridges.get(targetId) === bridge) {
+        bridges.delete(targetId);
+      }
+    });
 
-  const detachHandler = (params: Record<string, unknown>, sid?: string) => {
-    if (sid === sessionId || params.sessionId === sessionId) {
-      bridge!.close();
-      cdp.off("Target.detachedFromTarget", detachHandler);
-    }
-  };
-  cdp.on("Target.detachedFromTarget", detachHandler);
+    const destroyHandler = (params: Record<string, unknown>) => {
+      if (params.targetId === targetId) {
+        bridge.close();
+        cdp.off("Target.targetDestroyed", destroyHandler);
+      }
+    };
+    cdp.on("Target.targetDestroyed", destroyHandler);
 
-  bridges.set(targetId, bridge);
-  return bridge;
+    const detachHandler = (params: Record<string, unknown>, sid?: string) => {
+      if (sid === sessionId || params.sessionId === sessionId) {
+        bridge.close();
+        cdp.off("Target.detachedFromTarget", detachHandler);
+      }
+    };
+    cdp.on("Target.detachedFromTarget", detachHandler);
+
+    bridges.set(targetId, bridge);
+    return bridge;
+  })();
+
+  bridgeInflight.set(targetId, creating);
+  try {
+    return await creating;
+  } finally {
+    bridgeInflight.delete(targetId);
+  }
 }
 
 function validateAction(args: Record<string, unknown>): { action: string; fields: Record<string, unknown> } {
@@ -193,7 +215,8 @@ async function handleSingleAction(
         (p) => p.title.toLowerCase().includes(lower) || p.url.toLowerCase().includes(lower)
       );
     }
-    const offset = (fields.offset as number) ?? 0;
+    const rawOffset = (fields.offset as number) ?? 0;
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? Math.floor(rawOffset) : 0;
     const tabs = filtered.slice(offset).map((p) => ({
       ref_id: computeRefId(p.targetId, allIds),
       title: p.title.slice(0, 500),
@@ -203,7 +226,7 @@ async function handleSingleAction(
     const result: Record<string, unknown> = { offset, tabs };
     // Byte budget.
     let serialized = JSON.stringify(result);
-    while (serialized.length > OUTPUT_BUDGET_BYTES && (result.tabs as any[]).length > 0) {
+    while (Buffer.byteLength(serialized, "utf8") > OUTPUT_BUDGET_BYTES && (result.tabs as any[]).length > 0) {
       (result.tabs as any[]).pop();
       result.truncated = true;
       result.omitted_tabs = filtered.length - offset - (result.tabs as any[]).length;
