@@ -14,6 +14,7 @@ export class TabBridge {
   private closed = false;
   private tailPromise: Promise<unknown> = Promise.resolve();
   private onClose?: () => void;
+  private cleanups: Array<() => void> = [];
 
   constructor(
     targetId: string,
@@ -26,6 +27,11 @@ export class TabBridge {
     this.cdp = cdp;
     this.onClose = onClose;
     this.resetIdle();
+  }
+
+  /** Register a cleanup function to run on close (e.g. listener removal). */
+  addCleanup(fn: () => void): void {
+    this.cleanups.push(fn);
   }
 
   get isClosed(): boolean {
@@ -50,6 +56,11 @@ export class TabBridge {
     this.closed = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.elementRefs.clear();
+    // Run all registered cleanups (e.g. CDP listener removal).
+    for (const fn of this.cleanups) {
+      try { fn(); } catch { /* best effort */ }
+    }
+    this.cleanups.length = 0;
     try {
       this.cdp.send("Target.detachFromTarget", { sessionId: this.sessionId }).catch(() => {});
     } catch {

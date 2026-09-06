@@ -112,7 +112,6 @@ async function ensureBridge(cdp: CDPClient, targetId: string): Promise<TabBridge
     const destroyHandler = (params: Record<string, unknown>) => {
       if (params.targetId === targetId) {
         bridge.close();
-        cdp.off("Target.targetDestroyed", destroyHandler);
       }
     };
     cdp.on("Target.targetDestroyed", destroyHandler);
@@ -120,10 +119,15 @@ async function ensureBridge(cdp: CDPClient, targetId: string): Promise<TabBridge
     const detachHandler = (params: Record<string, unknown>, sid?: string) => {
       if (sid === sessionId || params.sessionId === sessionId) {
         bridge.close();
-        cdp.off("Target.detachedFromTarget", detachHandler);
       }
     };
     cdp.on("Target.detachedFromTarget", detachHandler);
+
+    // Register listener removal so close() cleans up regardless of reason.
+    bridge.addCleanup(() => {
+      cdp.off("Target.targetDestroyed", destroyHandler);
+      cdp.off("Target.detachedFromTarget", detachHandler);
+    });
 
     bridges.set(targetId, bridge);
     return bridge;
