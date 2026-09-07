@@ -7,7 +7,8 @@ const DEADLINE_MS = 5 * 60 * 1000; // 5 minutes
 export async function loadAllAction(
   cdp: CDPClient,
   sessionId: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<string> {
   const selector = args.selector as string;
   const rawInterval = args.interval_ms as number | undefined;
@@ -18,6 +19,7 @@ export async function loadAllAction(
   let clicks = 0;
 
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error("Request aborted.");
     const r = await cdp.send("Runtime.evaluate", {
       expression: `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});

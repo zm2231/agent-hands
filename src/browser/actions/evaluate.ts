@@ -8,6 +8,7 @@ export async function evaluateAction(
   args: Record<string, unknown>
 ): Promise<string> {
   const expression = args.expression as string;
+  if (expression.length > 1_000_000) throw new Error("Expression exceeds 1 MB limit.");
 
   await cdp.send("Runtime.enable", {}, sessionId);
 

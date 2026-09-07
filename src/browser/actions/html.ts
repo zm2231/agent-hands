@@ -30,7 +30,7 @@ export async function htmlAction(
     const r = await cdp.send("Runtime.evaluate", {
       expression: `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) throw new Error("Element not found: ${selector}");
+        if (!el) throw new Error("Element not found: " + ${JSON.stringify(selector)});
         return el.outerHTML;
       })()`,
       returnByValue: true,

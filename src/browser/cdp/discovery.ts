@@ -36,7 +36,6 @@ function devToolsPortFileCandidates(): string[] {
   }
 
   const os = platform();
-  let bases: string[] = [];
   let browsers: string[] = [];
 
   if (os === "darwin") {

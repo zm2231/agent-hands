@@ -326,7 +326,7 @@ async function handleSingleAction(
         return result;
       }
       case "navigate": {
-        const result = await navigateAction(cdp, bridge.sessionId, fields);
+        const result = await navigateAction(cdp, bridge.sessionId, fields, signal);
         return { ref_id: computedRefId, result };
       }
       case "evaluate": {
@@ -367,7 +367,7 @@ async function handleSingleAction(
       }
       case "load_all": {
         if (typeof fields.selector !== "string" || !fields.selector) throw new Error("load_all requires a selector.");
-        const result = await loadAllAction(cdp, bridge.sessionId, fields);
+        const result = await loadAllAction(cdp, bridge.sessionId, fields, signal);
         return { ref_id: computedRefId, result };
       }
       default:
@@ -405,6 +405,7 @@ export function createBrowserSurface(): SurfaceDescriptor {
         interval_ms: { type: "integer" },
       },
       required: ["action"],
+      additionalProperties: false,
     },
     annotations: {
       readOnlyHint: false,

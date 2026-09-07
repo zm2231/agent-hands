@@ -9,6 +9,11 @@ const TEXT_BUDGET_BYTES = 32_000;
 const RESULT_TTL_MS = 3_600_000; // 1 hour
 const SCREENSHOT_TTL_MS = 86_400_000; // 24 hours
 
+const HANDLE_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+function assertHandle(h: string): void {
+  if (!HANDLE_RE.test(h)) throw new Error("Invalid result handle.");
+}
+
 let artifactDir: string | null = null;
 let lastCleanup = 0;
 const CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
@@ -125,6 +130,7 @@ export async function readResult(
   handle: string,
   offset: number = 0
 ): Promise<{ handle: string; offset: number; text: string; complete: boolean; next_offset?: number }> {
+  assertHandle(handle);
   const dir = await ensureArtifactDir();
   const filepath = join(dir, `result-${handle}.txt`);
 
@@ -169,6 +175,7 @@ export async function readResult(
 }
 
 export async function discardResult(handle: string): Promise<void> {
+  assertHandle(handle);
   const dir = await ensureArtifactDir();
   const filepath = join(dir, `result-${handle}.txt`);
   await unlink(filepath).catch(() => {});

@@ -5,7 +5,8 @@ const NAVIGATION_TIMEOUT_MS = 30_000;
 export async function navigateAction(
   cdp: CDPClient,
   sessionId: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<string> {
   const url = args.url as string;
   if (!/^https?:\/\//i.test(url)) {
@@ -36,6 +37,7 @@ export async function navigateAction(
 
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error("Request aborted.");
     const r = await cdp.send("Runtime.evaluate", {
       expression: "document.readyState",
       returnByValue: true,
