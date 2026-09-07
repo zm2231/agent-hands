@@ -172,7 +172,8 @@ function requireRefId(fields: Record<string, unknown>, action: string): string {
 }
 
 async function handleSingleAction(
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const { action, fields } = validateAction(args);
 
@@ -283,6 +284,7 @@ async function handleSingleAction(
   const bridge = await ensureBridge(cdp, targetId);
 
   return bridge.enqueue(async () => {
+    if (signal?.aborted) throw new Error("Request aborted.");
     switch (action) {
       case "open": {
         const snapshot = await takeSnapshot(cdp, bridge.sessionId, computedRefId, bridge.elementRefs, {
@@ -423,23 +425,10 @@ export function createBrowserSurface(): SurfaceDescriptor {
     async handle(
       _toolName: string,
       args: Record<string, unknown>,
-      _ctx: CallContext
+      ctx: CallContext
     ): Promise<ToolResult> {
       try {
-        // Check for batch (top-level array).
-        if (Array.isArray(args)) {
-          if (args.length === 0) throw new Error("Batch must not be empty.");
-          const results: Record<string, unknown>[] = [];
-          for (const item of args) {
-            results.push(await handleSingleAction(item as Record<string, unknown>));
-          }
-          return {
-            content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
-            isError: false,
-          };
-        }
-
-        const result = await handleSingleAction(args);
+        const result = await handleSingleAction(args, ctx.signal);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
           isError: false,

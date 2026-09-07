@@ -1,5 +1,3 @@
-// navigate action.
-
 import type { CDPClient } from "../cdp/types.js";
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -16,17 +14,15 @@ export async function navigateAction(
 
   await cdp.send("Page.enable", {}, sessionId);
 
-  // Arm load event.
   const loadPromise = new Promise<void>((resolve) => {
-    const handler = () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
       cdp.off("Page.loadEventFired", handler);
-      resolve();
+      if (timer) clearTimeout(timer);
     };
+    const handler = () => { cleanup(); resolve(); };
     cdp.on("Page.loadEventFired", handler);
-    setTimeout(() => {
-      cdp.off("Page.loadEventFired", handler);
-      resolve();
-    }, NAVIGATION_TIMEOUT_MS);
+    timer = setTimeout(() => { cleanup(); resolve(); }, NAVIGATION_TIMEOUT_MS);
   });
 
   const result = await cdp.send("Page.navigate", { url }, sessionId);
@@ -38,7 +34,6 @@ export async function navigateAction(
     await loadPromise;
   }
 
-  // Poll readyState.
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const r = await cdp.send("Runtime.evaluate", {

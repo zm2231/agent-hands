@@ -84,11 +84,12 @@ export async function acquireSession(components: BrokerComponents): Promise<Sess
 
     pending.then(
       (session) => {
-        if (creationPromise === pending) {
+        if (creationPromise === pending && session.isAlive) {
           activeSession = session;
           creationPromise = null;
         } else {
           session.close().catch(() => {});
+          if (creationPromise === pending) creationPromise = null;
         }
       },
       () => {

@@ -10,7 +10,6 @@ import { verifyBrokerComponents } from "./broker/verify.js";
 import { brokerDispatch } from "./broker/dispatch.js";
 import { sanitizeError } from "../kernel/sanitize.js";
 import { trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
-import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -158,14 +157,19 @@ export async function executePipeline(
     );
     let tmpPath: string | undefined;
     if (hasLargeText) {
-      const ts = Date.now();
-      const appSlug = (bundleId ?? "unknown").replace(/[^a-zA-Z0-9.-]/g, "_");
-      tmpPath = join(tmpdir(), `agent-hands-ax-${appSlug}-${ts}.txt`);
-      const fullText = responseContent
-        .filter((b) => b.type === "text")
-        .map((b) => (b as any).text)
-        .join("\n---\n");
-      await writeFile(tmpPath, fullText, "utf8").catch(() => { tmpPath = undefined; });
+      try {
+        const { mkdtemp: mkd } = await import("node:fs/promises");
+        const dir = await mkd(join(tmpdir(), "agent-hands-ax-"), { mode: 0o700 } as any);
+        tmpPath = join(dir, "tree.txt");
+        const fullText = responseContent
+          .filter((b) => b.type === "text")
+          .map((b) => (b as any).text)
+          .join("\n---\n");
+        const { open: fsOpen } = await import("node:fs/promises");
+        const fh = await fsOpen(tmpPath, "wx", 0o600);
+        await fh.writeFile(fullText, "utf8");
+        await fh.close();
+      } catch { tmpPath = undefined; }
     }
     responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
 
@@ -318,10 +322,16 @@ export async function executeBatchPipeline(
     const telemetry = await focusFinish!();
 
     // Collect ALL execution results first (for correct metadata).
+    function batchContent(method: string, content: ContentBlock[], isError: boolean): ContentBlock[] {
+      if (method === "get_app_state") return trimContentBlocks(content as any) as ContentBlock[];
+      if (isError) return content;
+      return [{ type: "text", text: `${method}: ok` } as ContentBlock];
+    }
+
     const allResults: Array<{ method: string; content: ContentBlock[]; isError: boolean }> = [];
     allResults.push({
       method: primary.method,
-      content: trimContentBlocks(result.content as any) as ContentBlock[],
+      content: batchContent(primary.method, result.content, result.isError),
       isError: result.isError,
     });
     if (result.followUpResults) {
@@ -329,7 +339,7 @@ export async function executeBatchPipeline(
         const fu = result.followUpResults[i];
         allResults.push({
           method: rest[i].method,
-          content: trimContentBlocks(fu.content as any) as ContentBlock[],
+          content: batchContent(rest[i].method, fu.content, fu.isError),
           isError: fu.isError,
         });
       }

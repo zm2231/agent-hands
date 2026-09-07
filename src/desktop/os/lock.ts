@@ -13,11 +13,19 @@ function lockRoot(): string {
 }
 
 async function ensureLockDir(): Promise<string> {
+  const { lstat } = await import("node:fs/promises");
   const root = lockRoot();
   const locksDir = join(root, "locks");
   await mkdir(locksDir, { recursive: true, mode: 0o700 });
-  const s = await stat(root);
-  if (!s.isDirectory()) throw new Error("Lock root is not a directory.");
+
+  for (const dir of [root, locksDir]) {
+    const s = await lstat(dir);
+    if (!s.isDirectory()) throw new Error(`Lock path is not a directory: ${dir}`);
+    if (s.isSymbolicLink()) throw new Error(`Lock path is a symlink: ${dir}`);
+    if (s.uid !== uid) throw new Error(`Lock path not owned by current user: ${dir}`);
+    const mode = s.mode & 0o777;
+    if ((mode & 0o077) !== 0) throw new Error(`Lock path has unsafe permissions: ${dir}`);
+  }
   return locksDir;
 }
 
@@ -82,7 +90,7 @@ export async function acquireLock(
       if (!locked && stdout.includes("LOCKED")) {
         locked = true;
         const ownerData = JSON.stringify({ runId, app, pid: process.pid, ts: new Date().toISOString() });
-        writeFile(ownerPath, ownerData, { mode: 0o600 })
+        import("node:fs/promises").then(({ open: fsOpen }) => fsOpen(ownerPath, "wx", 0o600)).then(async (fh) => { await fh.writeFile(ownerData); await fh.close(); })
           .then(() => {
             resolved = true;
             resolve({

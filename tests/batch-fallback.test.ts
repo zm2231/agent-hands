@@ -34,7 +34,7 @@ vi.mock("../src/desktop/broker/verify.js", () => ({
 
 vi.mock("../src/desktop/broker/dispatch.js", () => ({
   brokerDispatch: vi.fn().mockResolvedValue({
-    content: [{ type: "text", text: "x".repeat(26 * 1024 * 1024) }],
+    content: [{ type: "text", text: "  Value: " + "x".repeat(5000) + "\n  [1] AXButton \"OK\"" }],
     isError: false,
     modelTurnsStarted: 0,
     ephemeralThread: true,
@@ -42,8 +42,35 @@ vi.mock("../src/desktop/broker/dispatch.js", () => ({
   }),
 }));
 
-describe("executeBatchPipeline oversized fallback (mocked)", () => {
-  it("truncates oversized results and stays within 25 MB", async () => {
+describe("batch content handling", () => {
+  it("caps AX tree values in get_app_state batch results", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+
+    const ctx = {
+      signal: new AbortController().signal,
+      audit: vi.fn().mockResolvedValue(undefined),
+      elicit: vi.fn().mockResolvedValue({ action: "approve" }),
+    };
+
+    const result = await executeBatchPipeline(
+      "com.test.app",
+      [{ method: "get_app_state" }],
+      false,
+      ctx as any
+    );
+
+    expect(result.isError).toBe(false);
+    const parsed = JSON.parse((result.content[0] as any).text);
+    expect(parsed.batch).toBe(true);
+    expect(parsed.results).toHaveLength(1);
+
+    const treeText = parsed.results[0].content[0].text;
+    expect(treeText).toContain("[5000 chars total]");
+    expect(treeText).toContain("x".repeat(200));
+    expect(treeText).not.toContain("x".repeat(201));
+  });
+
+  it("strips content from mutation batch results", async () => {
     const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
 
     const ctx = {
@@ -59,21 +86,8 @@ describe("executeBatchPipeline oversized fallback (mocked)", () => {
       ctx as any
     );
 
-    // No structuredContent in the response.
-    expect((result as any).structuredContent).toBeUndefined();
-
-    // Content should be the truncated batch response.
-    expect(result.content).toHaveLength(1);
     const parsed = JSON.parse((result.content[0] as any).text);
-    expect(parsed.batch).toBe(true);
-    expect(parsed.results).toEqual([]);
-    expect(parsed.actions_returned).toBe(0);
-    expect(parsed.truncated).toBe(true);
-    expect(parsed.actions_executed).toBe(1);
-
-    // Envelope must be under 25 MB and actually tiny.
-    const envelopeBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
-    expect(envelopeBytes).toBeLessThanOrEqual(25 * 1024 * 1024);
-    expect(envelopeBytes).toBeLessThan(1024);
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].content[0].text).toBe("click: ok");
   });
 });
