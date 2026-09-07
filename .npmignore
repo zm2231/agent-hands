@@ -1,0 +1,8 @@
+tests/
+design/
+.DS_Store
+*.tsbuildinfo
+tsconfig.json
+vitest.config.*
+.gitignore
+.github/

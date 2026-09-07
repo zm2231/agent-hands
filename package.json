@@ -26,5 +26,22 @@
     "@types/ws": "^8.18.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/softaworks/agent-hands.git"
+  },
+  "homepage": "https://github.com/softaworks/agent-hands",
+  "keywords": [
+    "mcp",
+    "computer-use",
+    "desktop-control",
+    "browser-automation",
+    "agent",
+    "codex",
+    "accessibility",
+    "cdp",
+    "macos"
+  ],
+  "author": "Zain Merchant"
 }

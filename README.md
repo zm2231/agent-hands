@@ -17,7 +17,13 @@ Both run through standard MCP (stdio), so any agent that speaks the protocol can
 ## Setup
 
 ```bash
-git clone <repo-url>
+npx agent-hands
+```
+
+Or install from source:
+
+```bash
+git clone https://github.com/softaworks/agent-hands.git
 cd agent-hands
 npm install && npm run build
 ```
