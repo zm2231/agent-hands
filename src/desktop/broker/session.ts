@@ -54,6 +54,8 @@ export class BrokerSession {
       this.workDir = join(this.tempRoot, "work");
       await mkdir(codexHome, { mode: 0o700 });
       await writeFile(join(codexHome, "config.toml"), "", { mode: 0o600 });
+      const { chmod } = await import("node:fs/promises");
+      await chmod(codexHome, 0o700);
       await mkdir(this.workDir, { mode: 0o700 });
 
       const env: Record<string, string> = {
@@ -86,7 +88,7 @@ export class BrokerSession {
         "-c", 'otel.exporter="none"',
         "-c", 'web_search="disabled"',
         "-c", 'history.persistence="none"',
-        "-c", `mcp_servers={"computer-use" = { command = "${this.components.clientPath}", args = ["mcp"], cwd = "${COMPUTER_USE_PLUGIN_ROOT}", enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120 }}`,
+        "-c", `mcp_servers={"computer-use" = { command = ${JSON.stringify(this.components.clientPath)}, args = ["mcp"], cwd = ${JSON.stringify(this.workDir)}, enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120 }}`,
         "-c", "plugins={}",
       ];
 
@@ -96,6 +98,10 @@ export class BrokerSession {
         { cwd: this.workDir, env, stdio: ["pipe", "pipe", "pipe"], detached: true, shell: false }
       );
 
+      this.proc.stdin?.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code !== "EPIPE") this.close().catch(() => {});
+      });
+      this.proc.once("error", () => this.close().catch(() => {}));
       this.proc.once("close", () => {
         this.closed = true;
         this.cleanup().catch(() => {});
@@ -243,16 +249,77 @@ export class BrokerSession {
   }
 
   private async killProcess(): Promise<void> {
-    if (this.proc && !this.proc.killed) {
-      try {
-        if (this.proc.pid) process.kill(-this.proc.pid, "SIGKILL");
-      } catch {
-        try { this.proc.kill("SIGKILL"); } catch {}
+    const proc = this.proc;
+    const pid = proc?.pid;
+    if (!proc || !pid) return;
+
+    const { spawnSync } = await import("node:child_process");
+    const pExists = (p: number) => { try { process.kill(p, 0); return true; } catch { return false; } };
+    const pgExists = (p: number) => { try { process.kill(-p, 0); return true; } catch { return false; } };
+
+    const collectDescendants = (root: number): Set<number> => {
+      const found = new Set<number>();
+      const queue = [root];
+      while (queue.length > 0 && found.size < 256) {
+        const parent = queue.shift()!;
+        const r = spawnSync("/usr/bin/pgrep", ["-P", String(parent)], { encoding: "utf8", timeout: 2000 });
+        if (r.error || (r.status !== 0 && r.status !== 1)) continue;
+        for (const tok of (r.stdout ?? "").trim().split(/\s+/)) {
+          const c = Number(tok);
+          if (Number.isSafeInteger(c) && c > 1 && c !== root && !found.has(c)) { found.add(c); queue.push(c); }
+        }
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 3000);
-        this.proc!.on("close", () => { clearTimeout(timer); resolve(); });
-      });
+      return found;
+    };
+
+    const collectByCwd = (): Set<number> => {
+      if (!this.workDir) return new Set();
+      const r = spawnSync("/usr/sbin/lsof", ["-a", "-d", "cwd", "+d", this.workDir, "-Fp"], { encoding: "utf8", timeout: 3000 });
+      const pids = new Set<number>();
+      for (const line of (r.stdout ?? "").split("\n")) {
+        const m = line.match(/^p(\d+)$/);
+        if (m) { const p = Number(m[1]); if (Number.isSafeInteger(p) && p > 1 && p !== process.pid) pids.add(p); }
+      }
+      return pids;
+    };
+
+    // Enumerate descendants.
+    const descendants = new Set<number>();
+    for (const c of collectDescendants(pid)) descendants.add(c);
+    for (const c of collectByCwd()) descendants.add(c);
+
+    // SIGSTOP the process group to freeze spawning.
+    try { process.kill(-pid, "SIGSTOP"); } catch {
+      try { proc.kill("SIGSTOP"); } catch { /* exited */ }
+    }
+
+    // Stabilize: re-enumerate up to 16 passes.
+    for (let pass = 0; pass < 16; pass++) {
+      let added = false;
+      for (const c of collectDescendants(pid)) {
+        if (!descendants.has(c)) { descendants.add(c); added = true; try { process.kill(c, "SIGSTOP"); } catch {} }
+      }
+      for (const c of collectByCwd()) {
+        if (!descendants.has(c)) { descendants.add(c); added = true; try { process.kill(c, "SIGSTOP"); } catch {} }
+      }
+      if (!added && pass > 0) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    // SIGKILL everything.
+    for (const c of descendants) { try { process.kill(c, "SIGKILL"); } catch {} }
+    try { process.kill(-pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch {} }
+
+    // Post-kill sweep.
+    for (let pass = 0; pass < 2; pass++) {
+      await new Promise((r) => setTimeout(r, 25));
+      for (const c of collectByCwd()) { try { process.kill(c, "SIGKILL"); } catch {} }
+    }
+
+    // Wait for exit (up to 1.5s).
+    for (let elapsed = 0; elapsed < 1500; elapsed += 25) {
+      if (!pgExists(pid) && [...descendants].every((c) => !pExists(c))) break;
+      await new Promise((r) => setTimeout(r, 25));
     }
   }
 
