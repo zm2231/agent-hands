@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 
-// Mock all pipeline dependencies before importing the module.
 vi.mock("../src/desktop/os/identity.js", () => ({
   resolveAppIdentity: vi.fn().mockResolvedValue({
     bundleId: "com.test.app",
@@ -28,14 +27,14 @@ vi.mock("../src/desktop/os/focus.js", () => ({
 vi.mock("../src/desktop/broker/verify.js", () => ({
   verifyBrokerComponents: vi.fn().mockResolvedValue({
     codexPath: "/fake/codex",
-    codexVersion: "x".repeat(30 * 1024 * 1024), // 30 MB version string
+    codexVersion: "1.0.0",
     clientBuild: "test-build",
   }),
 }));
 
 vi.mock("../src/desktop/broker/dispatch.js", () => ({
   brokerDispatch: vi.fn().mockResolvedValue({
-    content: [{ type: "text", text: "x".repeat(20 * 1024 * 1024) }],
+    content: [{ type: "text", text: "x".repeat(26 * 1024 * 1024) }],
     isError: false,
     modelTurnsStarted: 0,
     ephemeralThread: true,
@@ -44,7 +43,7 @@ vi.mock("../src/desktop/broker/dispatch.js", () => ({
 }));
 
 describe("executeBatchPipeline oversized fallback (mocked)", () => {
-  it("returns bounded result without structuredContent when envelope exceeds 25 MB", async () => {
+  it("truncates oversized results and stays within 25 MB", async () => {
     const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
 
     const ctx = {
@@ -60,22 +59,21 @@ describe("executeBatchPipeline oversized fallback (mocked)", () => {
       ctx as any
     );
 
-    // Must not have structuredContent (it would push past 25 MB).
+    // No structuredContent in the response.
     expect((result as any).structuredContent).toBeUndefined();
-    expect(result.isError).toBe(true);
 
-    // Content should be the minimal truncated batch response.
+    // Content should be the truncated batch response.
     expect(result.content).toHaveLength(1);
     const parsed = JSON.parse((result.content[0] as any).text);
     expect(parsed.batch).toBe(true);
     expect(parsed.results).toEqual([]);
     expect(parsed.actions_returned).toBe(0);
     expect(parsed.truncated).toBe(true);
+    expect(parsed.actions_executed).toBe(1);
 
-    // Envelope must be under 25 MB.
+    // Envelope must be under 25 MB and actually tiny.
     const envelopeBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
     expect(envelopeBytes).toBeLessThanOrEqual(25 * 1024 * 1024);
-    // And actually tiny.
     expect(envelopeBytes).toBeLessThan(1024);
   });
 });

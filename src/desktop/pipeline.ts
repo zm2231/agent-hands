@@ -151,7 +151,6 @@ export async function executePipeline(
 
     return {
       content: responseContent,
-      structuredContent: details,
       isError: result.isError,
     };
   } catch (e: unknown) {
@@ -379,7 +378,7 @@ export async function executeBatchPipeline(
     // Build candidate result and verify full envelope size.
     let candidateResults = responseResults;
     let candidateBody: Record<string, unknown>;
-    let candidate: { content: ContentBlock[]; structuredContent: typeof details; isError: boolean };
+    let candidate: { content: ContentBlock[]; isError: boolean };
 
     // Shrink response until the full ToolResult envelope fits 25 MB.
     // Can shrink to zero results; even the empty response is bounded.
@@ -404,7 +403,6 @@ export async function executeBatchPipeline(
 
       candidate = {
         content: [{ type: "text", text: JSON.stringify(candidateBody) }],
-        structuredContent: details,
         isError: anyError,
       };
 
@@ -412,7 +410,7 @@ export async function executeBatchPipeline(
       if (envelopeBytes <= MAX_BATCH_RESPONSE_BYTES) break;
 
       if (candidateResults.length === 0) {
-        // Even the empty response is too large — return without structuredContent.
+        // Even the empty response exceeds the limit — return minimal fallback.
         return {
           content: [{ type: "text", text: JSON.stringify({
             batch: true, actions_executed: totalExecuted, actions_returned: 0,

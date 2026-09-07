@@ -17,7 +17,7 @@ Both run through standard MCP (stdio), so any agent that speaks the protocol can
 ## Setup
 
 ```bash
-npx agent-hands
+npx @zmerchant/agent-hands
 ```
 
 Or install from source:

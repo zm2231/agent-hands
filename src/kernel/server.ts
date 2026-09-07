@@ -86,7 +86,6 @@ export function createServer(surfaces: SurfaceDescriptor[]): {
       const s = await buildStatus(surfaces, VERSION);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(s, null, 2) }],
-        structuredContent: s,
         isError: false,
       };
     }
