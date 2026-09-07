@@ -220,7 +220,10 @@ export async function brokerDispatch(
       "click", "drag", "get_app_state", "list_apps", "perform_secondary_action",
       "press_key", "scroll", "select_text", "set_value", "type_text",
     ];
-    const toolNames = ((cuServer.tools ?? []) as any[]).map((t: any) => t.name).sort();
+    if (!cuServer.tools || typeof cuServer.tools !== "object") {
+      throw new Error("Inventory computer-use server exposed no tool table.");
+    }
+    const toolNames = Object.keys(cuServer.tools as Record<string, unknown>).sort();
     if (JSON.stringify(toolNames) !== JSON.stringify(expectedMethods)) {
       throw new Error(
         `Inventory tool mismatch. Expected: ${expectedMethods.join(",")}; got: ${toolNames.join(",")}`
