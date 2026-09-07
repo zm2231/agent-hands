@@ -32,6 +32,32 @@ Check status:
 node dist/index.js --status
 ```
 
+### Surface selection
+
+By default both surfaces are enabled. Use `AGENT_HANDS_SURFACES` to run only one:
+
+```bash
+# Desktop only (no Chrome/CDP)
+AGENT_HANDS_SURFACES=desktop node dist/index.js
+
+# Browser only (no macOS desktop control)
+AGENT_HANDS_SURFACES=browser node dist/index.js
+```
+
+In an MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "agent-hands": {
+      "command": "node",
+      "args": ["/path/to/agent-hands/dist/index.js"],
+      "env": { "AGENT_HANDS_SURFACES": "desktop" }
+    }
+  }
+}
+```
+
 ### MCP client configuration
 
 Add to your MCP client config (e.g. Claude Code, Pi):

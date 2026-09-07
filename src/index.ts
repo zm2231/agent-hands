@@ -8,10 +8,30 @@ import { buildStatus } from "./kernel/status.js";
 
 const VERSION = "0.1.0";
 
+function buildSurfaces() {
+  const enabled = (process.env.AGENT_HANDS_SURFACES ?? "desktop,browser")
+    .toLowerCase()
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const surfaces = [];
+  if (enabled.includes("desktop")) surfaces.push(createDesktopSurface());
+  if (enabled.includes("browser")) surfaces.push(createBrowserSurface());
+
+  if (surfaces.length === 0) {
+    throw new Error(
+      `No surfaces enabled. AGENT_HANDS_SURFACES="${process.env.AGENT_HANDS_SURFACES}" ` +
+      'must include "desktop" and/or "browser".'
+    );
+  }
+  return surfaces;
+}
+
 async function main() {
   // CLI: --status prints status and exits.
   if (process.argv[2] === "--status") {
-    const surfaces = [createDesktopSurface(), createBrowserSurface()];
+    const surfaces = buildSurfaces();
     const status = await buildStatus(surfaces, VERSION);
     process.stdout.write(JSON.stringify(status, null, 2) + "\n");
     process.exit(0);
@@ -21,7 +41,7 @@ async function main() {
     process.exit(1);
   }
 
-  const surfaces = [createDesktopSurface(), createBrowserSurface()];
+  const surfaces = buildSurfaces();
   const server = createServer(surfaces);
   await server.run();
 }
