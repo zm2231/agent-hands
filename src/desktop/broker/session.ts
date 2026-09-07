@@ -23,6 +23,29 @@ export interface SessionCallResult {
 }
 
 export class BrokerSession {
+  private static serviceChecked = false;
+
+  private static async ensureCUAService(): Promise<void> {
+    if (BrokerSession.serviceChecked) return;
+    BrokerSession.serviceChecked = true;
+    try {
+      const { homedir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { stat: fsStat } = await import("node:fs/promises");
+      const { execFile: ef } = await import("node:child_process");
+      const sock = join(homedir(), "Library", "Group Containers",
+        "2DC432GLL2.com.openai.sky.CUAService", "IPC", "computeruse.sock");
+      try { if ((await fsStat(sock)).isSocket()) return; } catch {}
+      const app = join(homedir(), ".codex", "computer-use", "Codex Computer Use.app");
+      await new Promise<void>((res, rej) => ef("/usr/bin/open", ["-a", app], { timeout: 10_000 }, e => e ? rej(e) : res()));
+      const dl = Date.now() + 5_000;
+      while (Date.now() < dl) {
+        try { if ((await fsStat(sock)).isSocket()) return; } catch {}
+        await new Promise(r => setTimeout(r, 200));
+      }
+    } catch { /* proceed without cursor overlay */ }
+  }
+
   private proc: ChildProcess | null = null;
   private reader: ReturnType<typeof createLineReader> | null = null;
   private threadId = "";
@@ -91,6 +114,9 @@ export class BrokerSession {
         "-c", `mcp_servers={"computer-use" = { command = ${JSON.stringify(this.components.clientPath)}, args = ["mcp"], cwd = ${JSON.stringify(this.workDir)}, enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120 }}`,
         "-c", "plugins={}",
       ];
+
+      // Ensure SkyComputerUseService is running for cursor overlay.
+      await BrokerSession.ensureCUAService();
 
       this.proc = spawn(
         this.components.codexPath,
