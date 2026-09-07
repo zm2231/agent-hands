@@ -1,66 +1,28 @@
 # agent-hands
 
-MCP server giving any coding agent **hands**: the ability to operate the user's real macOS desktop and their real logged-in Chrome.
+Gives your agent hands. Real ones.
 
-Two deep modules behind one name:
+OpenAI built the best computer use out of any model and kept it locked inside Codex. agent-hands takes that same signed binary and exposes it as a standard MCP server. Claude, Hermes, OpenClaw, whatever agent you use; it can now see your screen, click buttons, type text, scroll through apps, and drive your actual logged-in Chrome. The full desktop and browser, not a sandbox.
 
-| Module | Capability | What it stands on |
-|---|---|---|
-| **Desktop Control** | Inspect and operate native macOS apps: click, type, scroll, read the accessibility tree and screenshots | OpenAI's signed `codex app-server` (zero model turn) |
-| **Browser Control** | Inspect and drive the user's persistent, logged-in Chrome | Chrome DevTools Protocol (CDP) |
+## What this actually does
 
-## Install
+Your agent gets two capabilities through one server:
 
-```bash
-npm install
-npm run build
-```
+**Desktop control.** Read the accessibility tree and screenshot of any running macOS app. Click elements, type text, press key combos, scroll, drag, set values. The agent sees what you see and acts on it directly.
 
-Requires Node 22+.
+**Browser control.** Connect to your real Chrome session with all your cookies, logins, and tabs intact. Open URLs, click elements, fill forms, take screenshots, run JavaScript, read network activity. No fake browser, no separate profile.
 
-## Usage
+Both run through standard MCP (stdio), so any agent that speaks the protocol can use them.
 
-Run as a stdio MCP server:
+## Setup
 
 ```bash
-node dist/index.js
+git clone <repo-url>
+cd agent-hands
+npm install && npm run build
 ```
 
-Check status:
-
-```bash
-node dist/index.js --status
-```
-
-### Surface selection
-
-By default both surfaces are enabled. Use `AGENT_HANDS_SURFACES` to run only one:
-
-```bash
-# Desktop only (no Chrome/CDP)
-AGENT_HANDS_SURFACES=desktop node dist/index.js
-
-# Browser only (no macOS desktop control)
-AGENT_HANDS_SURFACES=browser node dist/index.js
-```
-
-In an MCP client config:
-
-```json
-{
-  "mcpServers": {
-    "agent-hands": {
-      "command": "node",
-      "args": ["/path/to/agent-hands/dist/index.js"],
-      "env": { "AGENT_HANDS_SURFACES": "desktop" }
-    }
-  }
-}
-```
-
-### MCP client configuration
-
-Add to your MCP client config (e.g. Claude Code, Pi):
+Add to your agent's MCP config:
 
 ```json
 {
@@ -73,138 +35,68 @@ Add to your MCP client config (e.g. Claude Code, Pi):
 }
 ```
 
-## Tools
+Your agent now has hands.
 
-### Desktop (10 tools, macOS only)
+### What you need installed
 
-Advertised only when the required signed components are installed and verified.
+- Node.js 22+
+- ChatGPT macOS app at `/Applications/ChatGPT.app` with Computer Use enabled in Settings
+- Screen Recording and Accessibility permissions granted (System Settings > Privacy & Security)
+- For browser control: Chrome running with `--remote-debugging-port=9222`
 
-| Tool | Purpose |
+No ChatGPT subscription required at runtime.
+
+## Desktop tools
+
+| Tool | What it does |
 |---|---|
-| `list_apps` | List running macOS applications |
-| `get_app_state` | Get accessibility tree and screenshot of an app (call before interacting) |
-| `click` | Click on an element or coordinate |
-| `perform_secondary_action` | Perform a secondary accessibility action |
-| `set_value` | Set the value of an accessibility element |
-| `select_text` | Select text in an app element |
-| `scroll` | Scroll within an app element |
-| `drag` | Drag from one point to another |
-| `press_key` | Press a key or key combination (xdotool syntax) |
+| `list_apps` | List running macOS apps |
+| `get_app_state` | Screenshot + accessibility tree of an app |
+| `click` | Click an element or coordinate |
 | `type_text` | Type text into an app |
+| `press_key` | Press a key combo (`cmd+c`, `Return`, etc.) |
+| `set_value` | Set the value of a UI element |
+| `select_text` | Select text in an element |
+| `scroll` | Scroll within an app |
+| `drag` | Drag between two points |
+| `perform_secondary_action` | Right-click, expand, and other secondary actions |
 
-**Auto-snapshot (`observe: true`):** All 8 mutation tools accept an optional `observe: true` flag. When set, the server calls `get_app_state` in the same broker session after the action completes and returns the updated AX tree + screenshot alongside the action result. This halves round-trips for the common act→observe pattern (one process spawn instead of two).
+All mutation tools accept `observe: true` to get a fresh screenshot and accessibility tree back after the action completes. One call instead of two.
 
-**Batching (`desktop_batch`):** Run up to 20 same-app actions in a single MCP call. One identity resolution, one lock, one broker process spawn — all actions execute sequentially in the same ephemeral session. Stops on first error by default; set `continue_on_error: true` to keep going. Example:
+`desktop_batch` lets you send up to 20 same-app actions in a single call. One connection, sequential execution, roughly a second saved per action in round-trip overhead.
+
+## Browser actions
+
+One tool (`browser`) with 17 actions: `start`, `tabs`, `open`, `find`, `click`, `type`, `screenshot`, `html`, `navigate`, `evaluate`, `network`, `load_all`, `raw`, `read_result`, `discard_result`, `stop`. Call `help` for the full reference.
+
+## Configuration
+
+Only enable the surface you need:
+
+```bash
+AGENT_HANDS_SURFACES=desktop node dist/index.js   # desktop only
+AGENT_HANDS_SURFACES=browser node dist/index.js   # browser only
+```
+
+Or in your MCP config:
 
 ```json
 {
-  "app": "com.apple.TextEdit",
-  "actions": [
-    { "method": "click", "element_index": "5" },
-    { "method": "type_text", "text": "Hello world" },
-    { "method": "press_key", "key": "Return" },
-    { "method": "get_app_state" }
-  ]
+  "env": { "AGENT_HANDS_SURFACES": "desktop" }
 }
 ```
 
-Returns an array of per-action results. Allowed methods: all desktop tools except `list_apps` and `desktop_batch` (no recursion).
-
-#### Desktop prerequisites
-
-1. **ChatGPT macOS app** installed at `/Applications/ChatGPT.app`
-2. **Computer Use component** enabled (ChatGPT > Settings > Computer Use)
-3. **macOS permissions**: Screen Recording and Accessibility granted (System Settings > Privacy & Security)
-
-No active ChatGPT login or subscription is required at runtime.
-
-### Browser (1 tool, cross-platform)
-
-Always advertised. Call `help` for the action reference.
-
-| Action | Purpose |
-|---|---|
-| `help` | Full action reference |
-| `start` | Attach to a running browser (Linux: launch if needed) |
-| `tabs` | List open tabs, get ref_ids |
-| `open` | Open a URL or snapshot a tab |
-| `find` | Search the accessibility tree with a pattern |
-| `click` | Click by element id, CSS selector, or coordinates |
-| `type` | Type text (at element or current focus) |
-| `screenshot` | Capture viewport, element, or selector region |
-| `html` | Get outerHTML of page/element/selector |
-| `navigate` | Navigate a tab to a URL |
-| `evaluate` | Evaluate a JS expression |
-| `network` | List network resource entries |
-| `load_all` | Click "load more" until it disappears |
-| `raw` | Send any CDP method directly |
-| `read_result` | Continue reading a large result |
-| `discard_result` | Discard a stored result |
-| `stop` | Close tab bridges |
-
-#### Browser prerequisites
-
-Chrome (or any Chrome-family browser) with remote debugging enabled:
-
-```bash
-# macOS
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-
-# Linux
-chromium --remote-debugging-port=9222
-```
-
-Or set `CDP_PORT` / `CDP_PORT_FILE` environment variables.
-
-## Session Management
-
-The broker retains a single app-server session across calls instead of spawning per call. This keeps Computer Use activation alive between `get_app_state` and subsequent actions.
-
-- **Idle timeout**: 30 seconds of inactivity closes the session automatically
-- **Auto-recovery**: if the session dies, the next call creates a fresh one
-- **Graceful shutdown**: `SIGTERM`/`SIGINT` close the session before exit
-
-## Architecture
-
-One Node process, two capability surfaces, one shared kernel:
-
-```
-MCP client (stdio)
-    │
-    ▼
-┌─────────────────────┐
-│   Kernel            │  transport, routing, validation,
-│                     │  error sanitizing, status, audit
-├──────────┬──────────┤
-│ Desktop  │ Browser  │  two deep modules
-│ 10 tools │ 1 tool   │
-├──────────┼──────────┤
-│ Broker   │ CDP      │  seams with prod + test adapters
-│ (signed) │ (ws)     │
-└──────────┴──────────┘
-```
-
-- **Conditional registration**: desktop tools appear only when signed components verify
-- **Model-agnostic**: plain MCP over stdio, no vendor lock-in
-- **No nested model**: the calling agent chooses every action
-- **Fail closed**: unverified components, schema drift, or audit failures block the call
-
-## Test
-
-```bash
-npm test
-```
-
-39 tests across kernel validation, browser snapshots, actions, tab bridge, artifacts, and key normalization — all using a scripted fake CDP adapter (no real Chrome needed).
-
-## Environment variables
-
-| Variable | Default | Purpose |
+| Variable | Default | What it does |
 |---|---|---|
-| `CDP_HOST` | `127.0.0.1` | CDP debug host |
-| `CDP_PORT` | `9222` | CDP debug port |
-| `CDP_PORT_FILE` | — | Explicit DevToolsActivePort file path |
-| `CODEX_COMPUTER_USE_HOME` | `~/.direct-computer-use` | Audit log location |
+| `AGENT_HANDS_SURFACES` | `desktop,browser` | Which surfaces to enable |
+| `CDP_HOST` | `127.0.0.1` | Chrome debug host |
+| `CDP_PORT` | `9222` | Chrome debug port |
+
+## How it works under the hood
+
+The desktop surface dispatches to OpenAI's signed `codex app-server` binary (the same one Codex uses) through a retained session. The agent never runs its own model; it just executes what your agent asks for. Sessions stay alive across calls so Computer Use activation persists between reading the screen and acting on it. 30 seconds of idle closes the session automatically; if it dies, the next call creates a fresh one.
+
+The browser surface connects to Chrome's DevTools Protocol over the debugging port. Standard CDP, nothing exotic.
 
 ## License
 
