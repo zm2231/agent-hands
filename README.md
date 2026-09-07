@@ -45,12 +45,18 @@ Your agent now has hands.
 
 ### What you need installed
 
-- Node.js 22+
-- ChatGPT macOS app at `/Applications/ChatGPT.app` with Computer Use enabled in Settings
-- Screen Recording and Accessibility permissions granted (System Settings > Privacy & Security)
-- For browser control: Chrome running with `--remote-debugging-port=9222`
+- **Node.js 22+**
+- **Codex Computer Use** (ships inside the ChatGPT macOS app):
+  1. Install [ChatGPT for Mac](https://openai.com/chatgpt/mac/) at `/Applications/ChatGPT.app`
+  2. Open ChatGPT > Settings > enable **Computer Use**
+  3. Grant **Screen Recording** and **Accessibility** permissions (System Settings > Privacy & Security)
+- For browser control: Chrome with remote debugging enabled. Launch with:
+  ```
+  /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+  ```
+  agent-hands auto-detects the debug port from Chrome's `DevToolsActivePort` file if present.
 
-No ChatGPT subscription required at runtime.
+No ChatGPT subscription required at runtime. agent-hands uses the signed Codex Computer Use binary directly.
 
 ## Desktop tools
 

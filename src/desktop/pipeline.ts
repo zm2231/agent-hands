@@ -9,6 +9,10 @@ import { normalizeKey } from "./os/key-normalize.js";
 import { verifyBrokerComponents } from "./broker/verify.js";
 import { brokerDispatch } from "./broker/dispatch.js";
 import { sanitizeError } from "../kernel/sanitize.js";
+import { trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export async function executePipeline(
   method: string,
@@ -139,7 +143,6 @@ export async function executePipeline(
         if (!fu.isError) {
           parts.push(...fu.content);
         } else {
-          // Follow-up failed — include a note but don't fail the whole response.
           parts.push({
             type: "text",
             text: "[observe] Post-action snapshot failed.",
@@ -148,6 +151,23 @@ export async function executePipeline(
       }
       responseContent = parts;
     }
+
+    // Trim large AX trees: cap element text values, save full to tmp if needed.
+    const hasLargeText = responseContent.some(
+      (b) => b.type === "text" && (b as any).text?.length > SAVE_TO_TMP_THRESHOLD
+    );
+    let tmpPath: string | undefined;
+    if (hasLargeText) {
+      const ts = Date.now();
+      const appSlug = (bundleId ?? "unknown").replace(/[^a-zA-Z0-9.-]/g, "_");
+      tmpPath = join(tmpdir(), `agent-hands-ax-${appSlug}-${ts}.txt`);
+      const fullText = responseContent
+        .filter((b) => b.type === "text")
+        .map((b) => (b as any).text)
+        .join("\n---\n");
+      await writeFile(tmpPath, fullText, "utf8").catch(() => { tmpPath = undefined; });
+    }
+    responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
 
     return {
       content: responseContent,
@@ -301,7 +321,7 @@ export async function executeBatchPipeline(
     const allResults: Array<{ method: string; content: ContentBlock[]; isError: boolean }> = [];
     allResults.push({
       method: primary.method,
-      content: result.content,
+      content: trimContentBlocks(result.content as any) as ContentBlock[],
       isError: result.isError,
     });
     if (result.followUpResults) {
@@ -309,7 +329,7 @@ export async function executeBatchPipeline(
         const fu = result.followUpResults[i];
         allResults.push({
           method: rest[i].method,
-          content: fu.content,
+          content: trimContentBlocks(fu.content as any) as ContentBlock[],
           isError: fu.isError,
         });
       }
