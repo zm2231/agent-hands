@@ -34,7 +34,7 @@ vi.mock("../src/desktop/broker/verify.js", () => ({
 
 vi.mock("../src/desktop/broker/dispatch.js", () => ({
   brokerDispatch: vi.fn().mockResolvedValue({
-    content: [{ type: "text", text: "  Value: " + "x".repeat(5000) + "\n  [1] AXButton \"OK\"" }],
+    content: [{ type: "text", text: "\t1 text Value: " + "x".repeat(5000) + "\n\t2 button OK" }],
     isError: false,
     modelTurnsStarted: 0,
     ephemeralThread: true,

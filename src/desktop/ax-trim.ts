@@ -1,25 +1,49 @@
-const MAX_ELEMENT_TEXT_CHARS = 200;
+const MAX_VALUE_CHARS = 200;
 const SAVE_TO_TMP_THRESHOLD = 50_000;
-const VALUE_PATTERN = /^(\s*Value:\s*)(.+)$/gm;
-const QUOTED_LABEL_PATTERN = /^(\s*\[\d+\]\s+\w+\s+")(.{201,})(".*)/gm;
 
 export function trimAxTree(text: string): { text: string; trimmed: boolean; originalLength: number } {
   const originalLength = text.length;
   let trimmed = false;
+  const marker = "Value: ";
 
-  let result = text.replace(VALUE_PATTERN, (_match, prefix: string, value: string) => {
-    if (value.length <= MAX_ELEMENT_TEXT_CHARS) return _match;
-    trimmed = true;
-    const preview = value.slice(0, MAX_ELEMENT_TEXT_CHARS);
-    return `${prefix}${preview}... [${value.length} chars total]`;
-  });
+  let result = "";
+  let pos = 0;
 
-  result = result.replace(QUOTED_LABEL_PATTERN, (_match, prefix: string, label: string, suffix: string) => {
-    if (label.length <= MAX_ELEMENT_TEXT_CHARS) return _match;
-    trimmed = true;
-    const preview = label.slice(0, MAX_ELEMENT_TEXT_CHARS);
-    return `${prefix}${preview}... [${label.length} chars]${suffix}`;
-  });
+  while (pos < text.length) {
+    const idx = text.indexOf(marker, pos);
+    if (idx === -1) {
+      result += text.slice(pos);
+      break;
+    }
+
+    result += text.slice(pos, idx + marker.length);
+    const valueStart = idx + marker.length;
+
+    // Find end of this value: next \n\t followed by a digit (next element),
+    // or next \n followed by tab+digit, or end of string.
+    let valueEnd = text.length;
+    let searchPos = valueStart;
+    while (searchPos < text.length) {
+      const nl = text.indexOf("\n", searchPos);
+      if (nl === -1) { valueEnd = text.length; break; }
+      // Check if next line starts a new element (tabs + digit)
+      const afterNl = text.slice(nl + 1, nl + 20);
+      if (/^\t*\d/.test(afterNl) || afterNl.startsWith("</")) {
+        valueEnd = nl;
+        break;
+      }
+      searchPos = nl + 1;
+    }
+
+    const value = text.slice(valueStart, valueEnd);
+    if (value.length > MAX_VALUE_CHARS) {
+      trimmed = true;
+      result += value.slice(0, MAX_VALUE_CHARS) + `... [${value.length} chars total]`;
+    } else {
+      result += value;
+    }
+    pos = valueEnd;
+  }
 
   return { text: result, trimmed, originalLength };
 }
