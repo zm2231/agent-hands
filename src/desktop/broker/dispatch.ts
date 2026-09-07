@@ -34,6 +34,34 @@ export interface BrokerResult {
   modelTurnsStarted: number;
   ephemeralThread: boolean;
   followUpResults?: BrokerResult[];
+  contentOmitted?: boolean;
+}
+
+/**
+ * Apply aggregate content budget to a list of follow-up results.
+ * Returns a new array where over-budget results have content replaced
+ * with a placeholder and contentOmitted set to true.
+ * Exported for testing.
+ */
+export function applyAggregateBudget(
+  primaryContentBytes: number,
+  followUpResults: BrokerResult[],
+  maxAggregateBytes: number = 25 * 1024 * 1024
+): BrokerResult[] {
+  let aggregateBytes = primaryContentBytes;
+  return followUpResults.map((fu) => {
+    const fuContentBytes = Buffer.byteLength(JSON.stringify(fu.content), "utf8");
+    const overBudget = aggregateBytes + fuContentBytes > maxAggregateBytes;
+    if (!overBudget) {
+      aggregateBytes += fuContentBytes;
+      return fu;
+    }
+    return {
+      ...fu,
+      content: [{ type: "text", text: "[content omitted — aggregate response budget exceeded]" } as ContentBlock],
+      contentOmitted: true,
+    };
+  });
 }
 
 export async function brokerDispatch(
@@ -48,6 +76,7 @@ export async function brokerDispatch(
       params: Record<string, unknown>
     ) => Promise<{ action: string }>;
     followUpCalls?: FollowUpCall[];
+    continueOnError?: boolean;
   } = {}
 ): Promise<BrokerResult> {
   const toolTimeout = options.toolTimeoutMs ?? 120_000;
@@ -261,9 +290,14 @@ export async function brokerDispatch(
     }
 
     // 4c. Follow-up calls (same session, sequential, each zero-turn checked).
+    // Aggregate budget applied incrementally — content discarded immediately when over.
+    const MAX_AGGREGATE_BYTES = 25 * 1024 * 1024;
+    let aggregateContentBytes = Buffer.byteLength(JSON.stringify(content), "utf8");
     const followUpResults: BrokerResult[] = [];
-    if (!isError && options.followUpCalls?.length) {
-      for (const followUp of options.followUpCalls) {
+    const shouldRunFollowUps = options.followUpCalls?.length &&
+      (!isError || options.continueOnError);
+    if (shouldRunFollowUps) {
+      for (const followUp of options.followUpCalls!) {
         const turnsBeforeFollowUp = modelTurnsStarted;
         const fuResult = await request("mcpServer/tool/call", {
           threadId,
@@ -278,18 +312,34 @@ export async function brokerDispatch(
 
         const fuContent = (fuResult.content ?? []) as ContentBlock[];
         const fuIsError = Boolean(fuResult.isError);
-        const fuSerialized = JSON.stringify({ content: fuContent, structuredContent: fuResult });
-        if (Buffer.byteLength(fuSerialized) > MAX_RESULT_BYTES) {
+
+        // Per-result size check.
+        const fuContentBytes = Buffer.byteLength(JSON.stringify(fuContent), "utf8");
+        if (fuContentBytes > MAX_RESULT_BYTES) {
           throw new Error("Follow-up result exceeds 25 MB limit.");
         }
 
-        followUpResults.push({
-          content: fuContent,
-          structuredContent: fuResult as Record<string, unknown>,
-          isError: fuIsError,
-          modelTurnsStarted: 0,
-          ephemeralThread: true,
-        });
+        // Incremental aggregate budget (same logic as applyAggregateBudget).
+        const overBudget = aggregateContentBytes + fuContentBytes > MAX_AGGREGATE_BYTES;
+        followUpResults.push(overBudget
+          ? {
+              content: [{ type: "text", text: "[content omitted — aggregate response budget exceeded]" } as ContentBlock],
+              isError: fuIsError,
+              modelTurnsStarted: 0,
+              ephemeralThread: true,
+              contentOmitted: true,
+            }
+          : {
+              content: fuContent,
+              isError: fuIsError,
+              modelTurnsStarted: 0,
+              ephemeralThread: true,
+            }
+        );
+        if (!overBudget) aggregateContentBytes += fuContentBytes;
+
+        // Fail-stop: abort remaining follow-ups on error unless continueOnError.
+        if (fuIsError && !options.continueOnError) break;
       }
     }
 

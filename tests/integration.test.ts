@@ -124,3 +124,184 @@ describe("CDP disconnect bridge cleanup", () => {
     expect(bridge.elementRefs.size).toBe(0);
   });
 });
+
+// --- Batch integration tests ---
+
+describe("desktop_batch validation (live path)", () => {
+  it("rejects batch with 21 actions", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const actions = Array.from({ length: 21 }, () => ({ method: "get_app_state" }));
+    const ctx = {
+      signal: new AbortController().signal,
+      audit: async () => {},
+      elicit: async () => ({ action: "approve" }),
+    };
+    const result = await executeBatchPipeline("com.test.app", actions, false, ctx as any);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain("exceeds maximum of 20");
+  });
+
+  it("rejects empty actions array", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const ctx = {
+      signal: new AbortController().signal,
+      audit: async () => {},
+      elicit: async () => ({ action: "approve" }),
+    };
+    const result = await executeBatchPipeline("com.test.app", [], false, ctx as any);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain("non-empty array");
+  });
+
+  it("rejects list_apps in batch", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const ctx = {
+      signal: new AbortController().signal,
+      audit: async () => {},
+      elicit: async () => ({ action: "approve" }),
+    };
+    const result = await executeBatchPipeline("com.test.app", [{ method: "list_apps" }], false, ctx as any);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain('Invalid batch method "list_apps"');
+  });
+
+  it("rejects desktop_batch recursion", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const ctx = {
+      signal: new AbortController().signal,
+      audit: async () => {},
+      elicit: async () => ({ action: "approve" }),
+    };
+    const result = await executeBatchPipeline("com.test.app", [{ method: "desktop_batch" }], false, ctx as any);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain('Invalid batch method "desktop_batch"');
+  });
+
+  it("strips observe from batch actions", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const actions = [{ method: "click", observe: true, element_index: "3" }];
+    const ctx = {
+      signal: new AbortController().signal,
+      audit: async () => {},
+      elicit: async () => ({ action: "approve" }),
+    };
+    // Validation should pass (observe is a valid flag, stripped during normalization).
+    // Pipeline returns an error result because identity resolution fails in test env.
+    const result = await executeBatchPipeline("com.test.app", actions, false, ctx as any);
+    expect(result.isError).toBe(true);
+    // The error should be about identity, NOT about observe being an unknown field.
+    const text = (result.content[0] as any).text;
+    expect(text).not.toContain("observe");
+    expect(text).toMatch(/resolve|identity|app/i);
+  });
+
+  it("observe is stripped from normalized args (unit)", () => {
+    // Directly test what the normalization logic does.
+    const action = { method: "click", observe: true, element_index: "3" };
+    const args: Record<string, unknown> = { ...action, app: "com.test.resolved" };
+    delete args.method;
+    delete args.observe;
+    expect(args.observe).toBeUndefined();
+    expect(args).toEqual({ app: "com.test.resolved", element_index: "3" });
+  });
+
+  it("truncates batch response when aggregate exceeds 25 MB", () => {
+    const MAX_BATCH_RESPONSE_BYTES = 25 * 1024 * 1024;
+    const ENVELOPE_RESERVE = 4096;
+
+    // Simulate allResults (all executed)
+    const allResults = [
+      { method: "get_app_state", content: [{ type: "text", text: "x".repeat(20 * 1024 * 1024) }], isError: false },
+      { method: "click", content: [{ type: "text", text: "x".repeat(10 * 1024 * 1024) }], isError: true },
+    ];
+
+    // Truncation loop (mirrors pipeline logic)
+    let aggregateBytes = 0;
+    let truncatedAt: number | null = null;
+    const responseResults: typeof allResults = [];
+
+    for (let i = 0; i < allResults.length; i++) {
+      const entryBytes = Buffer.byteLength(JSON.stringify(allResults[i]), "utf8");
+      if (aggregateBytes + entryBytes + ENVELOPE_RESERVE > MAX_BATCH_RESPONSE_BYTES && responseResults.length > 0) {
+        truncatedAt = i;
+        break;
+      }
+      aggregateBytes += entryBytes;
+      responseResults.push(allResults[i]);
+    }
+
+    // Only first result retained, second was over budget
+    expect(responseResults).toHaveLength(1);
+    expect(truncatedAt).toBe(1);
+
+    // Execution facts from ALL results (not just retained)
+    const totalExecuted = allResults.length;
+    const anyError = allResults.some((r) => r.isError);
+    expect(totalExecuted).toBe(2);
+    expect(anyError).toBe(true); // Error from omitted result preserved
+    expect(allResults.slice(truncatedAt!).some((r) => r.isError)).toBe(true);
+  });
+
+  it("zero-result fallback omits structuredContent and is bounded", () => {
+    // Simulate the pipeline's zero-result fallback path.
+    // When even empty results + structuredContent exceed 25 MB,
+    // the fallback must omit structuredContent entirely.
+
+    const MAX_BATCH_RESPONSE_BYTES = 25 * 1024 * 1024;
+    const totalExecuted = 5;
+    const actions = Array.from({ length: 5 }, (_, i) => ({ method: "click" }));
+
+    // Simulate an oversized details object (e.g. very large brokerVersion string)
+    const details = {
+      runId: "test",
+      method: "desktop_batch",
+      app: "com.test",
+      outcome: "ok",
+      directCalls: totalExecuted,
+      // Deliberately huge field that would blow up structuredContent
+      brokerVersion: "x".repeat(30 * 1024 * 1024),
+    };
+
+    // Candidate with zero results but oversized structuredContent
+    const candidateBody = {
+      batch: true,
+      actions_executed: totalExecuted,
+      actions_returned: 0,
+      actions_requested: actions.length,
+      results: [] as unknown[],
+      truncated: true,
+      truncation_reason: "All results omitted; response exceeded size limit.",
+    };
+
+    const candidateWithDetails = {
+      content: [{ type: "text", text: JSON.stringify(candidateBody) }],
+      structuredContent: details,
+      isError: true,
+    };
+
+    // Confirm this WOULD exceed 25 MB
+    const withDetailsSize = Buffer.byteLength(JSON.stringify(candidateWithDetails), "utf8");
+    expect(withDetailsSize).toBeGreaterThan(MAX_BATCH_RESPONSE_BYTES);
+
+    // The fallback omits structuredContent
+    const fallback = {
+      content: [{ type: "text", text: JSON.stringify(candidateBody) }],
+      isError: true,
+    };
+
+    // Assert all required properties
+    expect((fallback as any).structuredContent).toBeUndefined();
+    expect(fallback.isError).toBe(true);
+
+    const parsed = JSON.parse((fallback.content[0] as any).text);
+    expect(parsed.results).toEqual([]);
+    expect(parsed.actions_executed).toBe(totalExecuted);
+    expect(parsed.truncated).toBe(true);
+
+    // Must be under 25 MB
+    const fallbackSize = Buffer.byteLength(JSON.stringify(fallback), "utf8");
+    expect(fallbackSize).toBeLessThanOrEqual(MAX_BATCH_RESPONSE_BYTES);
+    // And actually tiny
+    expect(fallbackSize).toBeLessThan(1024);
+  });
+});

@@ -191,3 +191,270 @@ export async function executePipeline(
     }
   }
 }
+
+
+// --- Batch pipeline ---
+
+interface BatchAction {
+  method: string;
+  [key: string]: unknown;
+}
+
+export async function executeBatchPipeline(
+  app: string,
+  actions: BatchAction[],
+  continueOnError: boolean,
+  ctx: CallContext
+): Promise<ToolResult> {
+  const runId = randomUUID();
+  const startedAt = new Date().toISOString();
+  let outcome = "ok";
+  let lock: { release(): Promise<void> } | null = null;
+  let focusStop: (() => void) | null = null;
+  let focusFinish: (() => Promise<import("./os/focus.js").FocusTelemetry>) | null = null;
+
+  try {
+    // Validate batch before acquiring any resources.
+    if (!Array.isArray(actions) || actions.length === 0) {
+      throw new Error("Batch actions must be a non-empty array.");
+    }
+    if (actions.length > 20) {
+      throw new Error(`Batch exceeds maximum of 20 actions (got ${actions.length}).`);
+    }
+
+    // Validate action methods: must be known mutation/read tools, not batch-in-batch.
+    const BATCHABLE_METHODS = new Set([
+      "get_app_state", "click", "type_text", "press_key", "set_value",
+      "select_text", "scroll", "drag", "perform_secondary_action",
+    ]);
+    for (const a of actions) {
+      if (!a.method || typeof a.method !== "string") {
+        throw new Error("Each batch action must have a string 'method' field.");
+      }
+      if (!BATCHABLE_METHODS.has(a.method)) {
+        throw new Error(
+          `Invalid batch method "${a.method}". ` +
+          `Allowed: ${[...BATCHABLE_METHODS].join(", ")}.`
+        );
+      }
+    }
+
+    // Resolve app identity once for the whole batch.
+    const identity = await resolveAppIdentity(app);
+    if (!identity.bundleId) {
+      outcome = "identity_rejected";
+      throw new Error(
+        `Cannot resolve app identity for "${app}". Provide a bundle identifier or full app path.`
+      );
+    }
+    const bundleId = identity.bundleId;
+    const leaseId = identity.leaseId;
+
+    // Acquire lock once.
+    if (leaseId) {
+      lock = await acquireLock(leaseId, runId, app);
+    }
+
+    // Start focus telemetry once.
+    const focus = startFocusTelemetry(bundleId);
+    focusStop = focus.stop;
+    focusFinish = focus.finish;
+
+    // Normalize keys, rewrite app, and strip agent-hands-only flags in all actions.
+    const normalized = actions.map((a) => {
+      const args: Record<string, unknown> = { ...a, app: bundleId };
+      delete args.method;
+      delete args.observe; // agent-hands control flag, not an upstream tool argument
+      if (a.method === "press_key" && typeof args.key === "string") {
+        args.key = normalizeKey(args.key);
+      }
+      return { method: a.method, args };
+    });
+
+    // Verify broker components once.
+    const components = await verifyBrokerComponents();
+
+    // Split into primary (first) + follow-ups (rest).
+    const [primary, ...rest] = normalized;
+
+    // Build follow-up calls for brokerDispatch.
+    const followUpCalls = rest.map((r) => ({
+      tool: r.method,
+      arguments: r.args,
+    }));
+
+    const result = await brokerDispatch(components, primary.method, primary.args, {
+      signal: ctx.signal,
+      followUpCalls,
+      continueOnError,
+    });
+
+    // Assert zero-turn architecture.
+    if (result.modelTurnsStarted !== 0 || !result.ephemeralThread) {
+      outcome = "policy_violation";
+      throw new Error("violated the zero-model-turn architecture");
+    }
+
+    // Finish focus telemetry.
+    const telemetry = await focusFinish!();
+
+    // Collect ALL execution results first (for correct metadata).
+    const allResults: Array<{ method: string; content: ContentBlock[]; isError: boolean }> = [];
+    allResults.push({
+      method: primary.method,
+      content: result.content,
+      isError: result.isError,
+    });
+    if (result.followUpResults) {
+      for (let i = 0; i < result.followUpResults.length; i++) {
+        const fu = result.followUpResults[i];
+        allResults.push({
+          method: rest[i].method,
+          content: fu.content,
+          isError: fu.isError,
+        });
+      }
+    }
+
+    // Execution facts from ALL results (before response truncation).
+    const totalExecuted = allResults.length;
+    const anyError = allResults.some((r) => r.isError);
+    outcome = anyError ? "official_error" : "ok";
+
+    // Truncate response payload to fit 25 MB aggregate.
+    const MAX_BATCH_RESPONSE_BYTES = 25 * 1024 * 1024;
+    const ENVELOPE_RESERVE = 4096;
+    let aggregateBytes = 0;
+    let truncatedAt: number | null = null;
+    const responseResults: typeof allResults = [];
+
+    for (let i = 0; i < allResults.length; i++) {
+      const entry = allResults[i];
+      const entryBytes = Buffer.byteLength(JSON.stringify(entry), "utf8");
+      if (aggregateBytes + entryBytes + ENVELOPE_RESERVE > MAX_BATCH_RESPONSE_BYTES && responseResults.length > 0) {
+        truncatedAt = i;
+        break;
+      }
+      aggregateBytes += entryBytes;
+      responseResults.push(entry);
+    }
+
+    const details = {
+      runId,
+      method: "desktop_batch",
+      permissionMode: "no-permissions",
+      app: bundleId,
+      outcome,
+      directCalls: totalExecuted,
+
+      modelTurnsStarted: 0,
+      ephemeralRuntimeContext: true,
+      brokerVersion: components.codexVersion,
+      clientBuild: components.clientBuild,
+      durationMs: Date.now() - new Date(startedAt).getTime(),
+      backgroundPreserved: telemetry.backgroundPreserved,
+      unrelatedFocusChanges: telemetry.unrelatedFocusChanges,
+      brokerCleanupVerified: true,
+    };
+
+    // Audit.
+    await ctx.audit({
+      timestamp: startedAt,
+      runId,
+      method: "desktop_batch",
+      permissionMode: "no-permissions",
+      app: bundleId,
+      mutating: true,
+      outcome,
+      durationMs: details.durationMs,
+      brokerVersion: components.codexVersion,
+      clientBuild: components.clientBuild,
+      directCalls: totalExecuted,
+      modelTurnsStarted: 0,
+      ephemeralThread: true,
+      brokerCleanupVerified: true,
+    });
+
+    // Build response: array of per-action results as a single text block.
+    // Build candidate result and verify full envelope size.
+    let candidateResults = responseResults;
+    let candidateBody: Record<string, unknown>;
+    let candidate: { content: ContentBlock[]; structuredContent: typeof details; isError: boolean };
+
+    // Shrink response until the full ToolResult envelope fits 25 MB.
+    // Can shrink to zero results; even the empty response is bounded.
+    while (true) {
+      candidateBody = {
+        batch: true,
+        actions_executed: totalExecuted,
+        actions_returned: candidateResults.length,
+        actions_requested: actions.length,
+        results: candidateResults,
+      };
+      if (candidateResults.length < allResults.length) {
+        const omitted = totalExecuted - candidateResults.length;
+        candidateBody.truncated = true;
+        candidateBody.truncated_at = candidateResults.length;
+        candidateBody.truncation_reason =
+          `Aggregate response exceeded 25 MB limit; ${omitted} executed result(s) omitted from response.`;
+        if (anyError) {
+          candidateBody.has_omitted_errors = allResults.slice(candidateResults.length).some((r) => r.isError);
+        }
+      }
+
+      candidate = {
+        content: [{ type: "text", text: JSON.stringify(candidateBody) }],
+        structuredContent: details,
+        isError: anyError,
+      };
+
+      const envelopeBytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+      if (envelopeBytes <= MAX_BATCH_RESPONSE_BYTES) break;
+
+      if (candidateResults.length === 0) {
+        // Even the empty response is too large — return without structuredContent.
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            batch: true, actions_executed: totalExecuted, actions_returned: 0,
+            actions_requested: actions.length, results: [],
+            truncated: true, truncation_reason: "All results omitted; response exceeded size limit.",
+          }) }],
+          isError: true,
+        };
+      }
+
+      // Remove last result and retry.
+      candidateResults = candidateResults.slice(0, -1);
+    }
+
+    return candidate;
+  } catch (e: unknown) {
+    if (focusFinish) {
+      try { await focusFinish(); } catch { /* non-fatal */ }
+    } else {
+      focusStop?.();
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+
+    try {
+      await ctx.audit({
+        timestamp: startedAt,
+        runId,
+        method: "desktop_batch",
+        outcome,
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+      });
+    } catch {
+      throw new Error(`Audit write failed during error handling: ${sanitizeError(msg)}`);
+    }
+
+    return {
+      content: [{ type: "text", text: sanitizeError(msg) }],
+      isError: true,
+    };
+  } finally {
+    if (lock) {
+      try { await lock.release(); } catch { /* logged, not re-thrown */ }
+    }
+  }
+}

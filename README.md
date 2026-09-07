@@ -68,6 +68,22 @@ Advertised only when the required signed components are installed and verified.
 
 **Auto-snapshot (`observe: true`):** All 8 mutation tools accept an optional `observe: true` flag. When set, the server calls `get_app_state` in the same broker session after the action completes and returns the updated AX tree + screenshot alongside the action result. This halves round-trips for the common act→observe pattern (one process spawn instead of two).
 
+**Batching (`desktop_batch`):** Run up to 20 same-app actions in a single MCP call. One identity resolution, one lock, one broker process spawn — all actions execute sequentially in the same ephemeral session. Stops on first error by default; set `continue_on_error: true` to keep going. Example:
+
+```json
+{
+  "app": "com.apple.TextEdit",
+  "actions": [
+    { "method": "click", "element_index": "5" },
+    { "method": "type_text", "text": "Hello world" },
+    { "method": "press_key", "key": "Return" },
+    { "method": "get_app_state" }
+  ]
+}
+```
+
+Returns an array of per-action results. Allowed methods: all desktop tools except `list_apps` and `desktop_batch` (no recursion).
+
 #### Desktop prerequisites
 
 1. **ChatGPT macOS app** installed at `/Applications/ChatGPT.app`

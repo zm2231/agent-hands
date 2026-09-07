@@ -204,4 +204,44 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   },
 ];
 
+// Batch tool: run multiple same-app actions in one broker session.
+export const DESKTOP_BATCH_TOOL: ToolDefinition = {
+  name: "desktop_batch",
+  description:
+    "Run multiple desktop actions on the same app in a single call. " +
+    "All actions execute sequentially in one broker session (one process spawn). " +
+    "Stops on first error by default; set continue_on_error to keep going.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      app: { type: "string", description: APP_DESC },
+      actions: {
+        type: "array",
+        description:
+          "Array of actions to execute. Each object must have a 'method' field " +
+          "(one of the desktop tool names except list_apps and desktop_batch) " +
+          "and the parameters for that method.",
+        items: {
+          type: "object",
+          properties: {
+            method: { type: "string" },
+          },
+          required: ["method"],
+        },
+        minItems: 1,
+        maxItems: 20,
+      },
+      continue_on_error: {
+        type: "boolean",
+        description:
+          "When true, continue executing remaining actions after an error. " +
+          "Default: false (fail-stop).",
+      },
+    },
+    required: ["app", "actions"],
+    additionalProperties: false,
+  },
+  annotations: ACTION_ANNOTATIONS,
+};
+
 export const DESKTOP_METHOD_NAMES = DESKTOP_TOOLS.map((t) => t.name);
