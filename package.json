@@ -1,6 +1,6 @@
 {
   "name": "@zmerchant/agent-hands",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "MCP server giving any coding agent hands: macOS desktop control and Chrome browser control.",
   "type": "module",
   "main": "dist/index.js",
