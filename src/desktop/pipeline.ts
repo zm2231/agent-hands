@@ -8,6 +8,9 @@ import { startFocusTelemetry } from "./os/focus.js";
 import { normalizeKey } from "./os/key-normalize.js";
 import { verifyBrokerComponents } from "./broker/verify.js";
 import { brokerDispatch } from "./broker/dispatch.js";
+
+/** Track which apps have been activated (get_app_state called) in this session. */
+const activatedApps = new Set<string>();
 import { sanitizeError } from "../kernel/sanitize.js";
 import { trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
 import { tmpdir } from "node:os";
@@ -77,6 +80,18 @@ export async function executePipeline(
     const followUpCalls = observe && bundleId
       ? [{ tool: "get_app_state", arguments: { app: bundleId } }]
       : [];
+
+    // Auto-activate: if this is a mutation and the app hasn't been activated
+    // in this session, prepend get_app_state to establish the CUA context.
+    const isMutationCall = method !== "list_apps" && method !== "get_app_state";
+    if (isMutationCall && bundleId && !activatedApps.has(bundleId)) {
+      try {
+        await brokerDispatch(components, "get_app_state", { app: bundleId }, {
+          signal: ctx.signal,
+        });
+      } catch { /* activation failed, try the mutation anyway */ }
+      activatedApps.add(bundleId);
+    }
 
     const result = await brokerDispatch(components, method, cleanArgs, {
       signal: ctx.signal,
@@ -172,6 +187,11 @@ export async function executePipeline(
       } catch { tmpPath = undefined; }
     }
     responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
+
+    // Mark app as activated after successful get_app_state.
+    if (method === "get_app_state" && bundleId && !result.isError) {
+      activatedApps.add(bundleId);
+    }
 
     return {
       content: responseContent,
@@ -298,6 +318,13 @@ export async function executeBatchPipeline(
     const components = await verifyBrokerComponents();
 
     // Split into primary (first) + follow-ups (rest).
+    // Auto-activate: if the batch doesn't start with get_app_state,
+    // prepend one to establish the CUA context.
+    if (normalized[0].method !== "get_app_state" && normalized[0].method !== "list_apps") {
+      normalized.unshift({ method: "get_app_state", args: { app: bundleId } });
+    }
+    if (bundleId) activatedApps.add(bundleId);
+
     const [primary, ...rest] = normalized;
 
     // Build follow-up calls for brokerDispatch.

@@ -208,7 +208,7 @@ export class BrokerSession {
         if (opts.signal?.aborted) throw new Error("Request cancelled.");
 
         const abortHandler = opts.signal
-          ? () => { this.close().catch(() => {}); }
+          ? () => { /* abort rejects the pending request via timeout; session stays alive */ }
           : null;
         if (abortHandler) opts.signal!.addEventListener("abort", abortHandler, { once: true });
 
@@ -243,7 +243,16 @@ export class BrokerSession {
             ephemeralThread: true,
           };
         } catch (err) {
-          await this.close();
+          // Only tear down on transport/protocol failures, not broker action errors.
+          // Broker errors (-10005, "not active") return valid responses; the session survives.
+          if (!this.closed && this.proc && !this.proc.killed) {
+            // Check if the process is still alive before deciding to close.
+            try { process.kill(this.proc.pid!, 0); } catch {
+              await this.close();
+            }
+          } else {
+            await this.close();
+          }
           throw err;
         } finally {
           if (abortHandler && opts.signal) {
