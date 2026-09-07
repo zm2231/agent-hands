@@ -63,12 +63,25 @@ export async function executePipeline(
 
     // Verify and dispatch through the broker.
     const components = await verifyBrokerComponents();
-    const result = await brokerDispatch(components, method, args, {
+
+    // Auto-snapshot: when observe is true on a mutation, append get_app_state
+    // as a follow-up call in the same broker session (one spawn, two tool/calls).
+    const isMutation = method !== "list_apps" && method !== "get_app_state";
+    const observe = isMutation && args.observe === true;
+    const cleanArgs = { ...args };
+    delete cleanArgs.observe; // Strip observe before sending to upstream tool.
+
+    const followUpCalls = observe && bundleId
+      ? [{ tool: "get_app_state", arguments: { app: bundleId } }]
+      : [];
+
+    const result = await brokerDispatch(components, method, cleanArgs, {
       signal: ctx.signal,
       onElicitation: async (params) => {
         const resp = await ctx.elicit(params);
         return { action: resp.action };
       },
+      followUpCalls,
     });
 
     // Assert zero-turn architecture.
@@ -89,7 +102,7 @@ export async function executePipeline(
       permissionMode: "no-permissions",
       app: bundleId,
       outcome,
-      directCalls: 1,
+      directCalls: 1 + (result.followUpResults?.length ?? 0),
       modelTurnsStarted: 0,
       ephemeralRuntimeContext: true,
       brokerVersion: components.codexVersion,
@@ -118,8 +131,26 @@ export async function executePipeline(
       brokerCleanupVerified: true,
     });
 
+    // Merge follow-up results (e.g. auto-snapshot) into response content.
+    let responseContent = result.content;
+    if (result.followUpResults?.length) {
+      const parts: ContentBlock[] = [...result.content];
+      for (const fu of result.followUpResults) {
+        if (!fu.isError) {
+          parts.push(...fu.content);
+        } else {
+          // Follow-up failed — include a note but don't fail the whole response.
+          parts.push({
+            type: "text",
+            text: "[observe] Post-action snapshot failed.",
+          } as ContentBlock);
+        }
+      }
+      responseContent = parts;
+    }
+
     return {
-      content: result.content,
+      content: responseContent,
       structuredContent: details,
       isError: result.isError,
     };

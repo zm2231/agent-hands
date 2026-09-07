@@ -22,12 +22,18 @@ interface JsonRpcNotification {
   params?: Record<string, unknown>;
 }
 
+export interface FollowUpCall {
+  tool: string;
+  arguments: Record<string, unknown>;
+}
+
 export interface BrokerResult {
   content: ContentBlock[];
   structuredContent?: Record<string, unknown>;
   isError: boolean;
   modelTurnsStarted: number;
   ephemeralThread: boolean;
+  followUpResults?: BrokerResult[];
 }
 
 export async function brokerDispatch(
@@ -41,6 +47,7 @@ export async function brokerDispatch(
     onElicitation?: (
       params: Record<string, unknown>
     ) => Promise<{ action: string }>;
+    followUpCalls?: FollowUpCall[];
   } = {}
 ): Promise<BrokerResult> {
   const toolTimeout = options.toolTimeoutMs ?? 120_000;
@@ -230,7 +237,7 @@ export async function brokerDispatch(
       );
     }
 
-    // 4b. mcpServer/tool/call
+    // 4b. mcpServer/tool/call (primary)
     const callResult = await request("mcpServer/tool/call", {
       threadId,
       server: "computer-use",
@@ -238,19 +245,52 @@ export async function brokerDispatch(
       arguments: args,
     }, toolTimeout);
 
-    // Assert zero model turns.
+    // Assert zero model turns after primary call.
     if (modelTurnsStarted > 0) {
       throw new Error("violated the zero-model-turn architecture");
     }
 
-    // Validate result.
+    // Validate primary result.
     const content = (callResult.content ?? []) as ContentBlock[];
     const isError = Boolean(callResult.isError);
 
-    // Size check.
+    // Size check on primary.
     const serialized = JSON.stringify({ content, structuredContent: callResult });
     if (Buffer.byteLength(serialized) > MAX_RESULT_BYTES) {
       throw new Error("Result exceeds 25 MB limit.");
+    }
+
+    // 4c. Follow-up calls (same session, sequential, each zero-turn checked).
+    const followUpResults: BrokerResult[] = [];
+    if (!isError && options.followUpCalls?.length) {
+      for (const followUp of options.followUpCalls) {
+        const turnsBeforeFollowUp = modelTurnsStarted;
+        const fuResult = await request("mcpServer/tool/call", {
+          threadId,
+          server: "computer-use",
+          tool: followUp.tool,
+          arguments: followUp.arguments,
+        }, toolTimeout);
+
+        if (modelTurnsStarted > turnsBeforeFollowUp) {
+          throw new Error("violated the zero-model-turn architecture during follow-up call");
+        }
+
+        const fuContent = (fuResult.content ?? []) as ContentBlock[];
+        const fuIsError = Boolean(fuResult.isError);
+        const fuSerialized = JSON.stringify({ content: fuContent, structuredContent: fuResult });
+        if (Buffer.byteLength(fuSerialized) > MAX_RESULT_BYTES) {
+          throw new Error("Follow-up result exceeds 25 MB limit.");
+        }
+
+        followUpResults.push({
+          content: fuContent,
+          structuredContent: fuResult as Record<string, unknown>,
+          isError: fuIsError,
+          modelTurnsStarted: 0,
+          ephemeralThread: true,
+        });
+      }
     }
 
     return {
@@ -259,6 +299,7 @@ export async function brokerDispatch(
       isError,
       modelTurnsStarted,
       ephemeralThread: true,
+      followUpResults,
     };
   } finally {
     // Teardown: kill the process tree and await exit.

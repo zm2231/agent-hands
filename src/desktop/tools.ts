@@ -48,6 +48,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         click_count: {
           type: "integer",
           description: "Number of clicks. Defaults to 1",
@@ -73,6 +74,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         element_index: { type: "string", description: "Element index" },
         action: {
           type: "string",
@@ -91,6 +93,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         element_index: { type: "string", description: "Element index" },
         value: { type: "string", description: "Value to set" },
       },
@@ -109,6 +112,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
           type: "string",
           description: "App name or bundle identifier",
         },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         element_index: { type: "string", description: "Element index" },
         text: {
           type: "string",
@@ -134,6 +138,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         element_index: { type: "string", description: "Element index" },
         direction: {
           type: "string",
@@ -156,6 +161,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         from_x: { type: "number", description: "Start X" },
         from_y: { type: "number", description: "Start Y" },
         to_x: { type: "number", description: "End X" },
@@ -173,6 +179,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         key: { type: "string", description: "Key in xdotool syntax (e.g. \"a\", \"Return\", \"super+c\")" },
       },
       required: ["app", "key"],
@@ -187,6 +194,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
+        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
         text: { type: "string", description: "Text to type" },
       },
       required: ["app", "text"],
