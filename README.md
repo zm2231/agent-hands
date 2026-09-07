@@ -66,6 +66,8 @@ Advertised only when the required signed components are installed and verified.
 | `press_key` | Press a key or key combination (xdotool syntax) |
 | `type_text` | Type text into an app |
 
+**Auto-snapshot (`observe: true`):** All 8 mutation tools accept an optional `observe: true` flag. When set, the server calls `get_app_state` in the same broker session after the action completes and returns the updated AX tree + screenshot alongside the action result. This halves round-trips for the common act→observe pattern (one process spawn instead of two).
+
 #### Desktop prerequisites
 
 1. **ChatGPT macOS app** installed at `/Applications/ChatGPT.app`
