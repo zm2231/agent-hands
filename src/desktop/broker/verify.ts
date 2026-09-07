@@ -12,15 +12,16 @@ const CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex";
 const EXPECTED_TEAM_ID = "2DC432GLL2";
 const CODESIGN_TIMEOUT = 10_000;
 
+// Helper cwd must be this root or input injection silently no-ops while reads still work.
+export const COMPUTER_USE_PLUGIN_ROOT =
+  "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use";
+
 function clientPaths(): { current: string; legacy: string } {
   const tail =
     "Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
   return {
     current: join(homedir(), ".codex", "computer-use", tail),
-    legacy: join(
-      "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use",
-      tail
-    ),
+    legacy: join(COMPUTER_USE_PLUGIN_ROOT, tail),
   };
 }
 

@@ -43,6 +43,15 @@ async function main() {
 
   const surfaces = buildSurfaces();
   const server = createServer(surfaces);
+
+  const { closePool } = await import("./desktop/broker/dispatch.js");
+  const shutdown = async () => {
+    await closePool().catch(() => {});
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
   await server.run();
 }
 

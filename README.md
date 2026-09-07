@@ -156,6 +156,14 @@ chromium --remote-debugging-port=9222
 
 Or set `CDP_PORT` / `CDP_PORT_FILE` environment variables.
 
+## Session Management
+
+The broker retains a single app-server session across calls instead of spawning per call. This keeps Computer Use activation alive between `get_app_state` and subsequent actions.
+
+- **Idle timeout**: 30 seconds of inactivity closes the session automatically
+- **Auto-recovery**: if the session dies, the next call creates a fresh one
+- **Graceful shutdown**: `SIGTERM`/`SIGINT` close the session before exit
+
 ## Architecture
 
 One Node process, two capability surfaces, one shared kernel:
