@@ -323,8 +323,15 @@ export async function executeBatchPipeline(
 
     // Collect ALL execution results first (for correct metadata).
     function batchContent(method: string, content: ContentBlock[], isError: boolean): ContentBlock[] {
-      if (method === "get_app_state") return trimContentBlocks(content as any) as ContentBlock[];
-      if (isError) return content;
+      const textOnly = (content as any[]).filter((b: any) => b.type === "text");
+      if (isError) {
+        return textOnly.length > 0
+          ? textOnly
+          : [{ type: "text", text: "Error (no text content returned)" } as ContentBlock];
+      }
+      if (method === "get_app_state") {
+        return trimContentBlocks(textOnly) as ContentBlock[];
+      }
       return [{ type: "text", text: `${method}: ok` } as ContentBlock];
     }
 

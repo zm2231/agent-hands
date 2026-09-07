@@ -6,17 +6,17 @@ export function trimAxTree(text: string): { text: string; trimmed: boolean; orig
   let trimmed = false;
   const marker = "Value: ";
 
-  let result = "";
+  const parts: string[] = [];
   let pos = 0;
 
   while (pos < text.length) {
     const idx = text.indexOf(marker, pos);
     if (idx === -1) {
-      result += text.slice(pos);
+      parts.push(text.slice(pos));
       break;
     }
 
-    result += text.slice(pos, idx + marker.length);
+    parts.push(text.slice(pos, idx + marker.length));
     const valueStart = idx + marker.length;
 
     // Find end of this value: next \n\t followed by a digit (next element),
@@ -38,14 +38,14 @@ export function trimAxTree(text: string): { text: string; trimmed: boolean; orig
     const value = text.slice(valueStart, valueEnd);
     if (value.length > MAX_VALUE_CHARS) {
       trimmed = true;
-      result += value.slice(0, MAX_VALUE_CHARS) + `... [${value.length} chars total]`;
+      parts.push(value.slice(0, MAX_VALUE_CHARS) + `... [${value.length} chars total]`);
     } else {
-      result += value;
+      parts.push(value);
     }
     pos = valueEnd;
   }
 
-  return { text: result, trimmed, originalLength };
+  return { text: parts.join(""), trimmed, originalLength };
 }
 
 export function trimContentBlocks(
