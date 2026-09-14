@@ -51,9 +51,9 @@ function encode(message: HostMessage): Buffer {
   return frame;
 }
 
-function attachFrames(socket: Socket, onMessage: (message: HostMessage) => void, onClose: () => void): void {
+function attachFrames(socket: Socket, onMessage: (message: HostMessage) => boolean | void, onClose: () => void): void {
   let buffered = Buffer.alloc(0);
-  socket.on("data", (chunk) => {
+  const onData = (chunk: Buffer | string) => {
     buffered = Buffer.concat([buffered, typeof chunk === "string" ? Buffer.from(chunk) : chunk]);
     while (buffered.length >= 4) {
       const length = buffered.readUInt32LE(0);
@@ -64,14 +64,20 @@ function attachFrames(socket: Socket, onMessage: (message: HostMessage) => void,
       if (buffered.length < length + 4) return;
       const body = buffered.subarray(4, length + 4);
       buffered = buffered.subarray(length + 4);
+      let message: HostMessage;
       try {
-        onMessage(JSON.parse(body.toString("utf8")) as HostMessage);
+        message = JSON.parse(body.toString("utf8")) as HostMessage;
       } catch {
         socket.destroy(new Error("Extension message is not valid JSON."));
         return;
       }
+      if (onMessage(message) === true) {
+        socket.removeListener("data", onData);
+        return;
+      }
     }
-  });
+  };
+  socket.on("data", onData);
   socket.once("close", onClose);
   socket.once("error", onClose);
 }
@@ -187,9 +193,9 @@ export async function createExtensionConnection(): Promise<ExtensionConnection> 
             return;
           }
           clearTimeout(timer);
-          candidate.removeAllListeners("data");
           socket = candidate;
           resolve(candidate);
+          return true;
         }, () => {});
       });
       server.once("error", reject);

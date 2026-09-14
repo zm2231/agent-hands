@@ -89,6 +89,8 @@ function computeRefId(targetId: string, allTargetIds: string[]): string {
 }
 
 function resolveTargetId(refId: string, pages: Array<{ targetId: string }>): string {
+  const exact = pages.find((p) => p.targetId === refId);
+  if (exact) return exact.targetId;
   const matches = pages.filter((p) => p.targetId.startsWith(refId));
   if (matches.length === 0) throw new Error(`No target matching prefix ${refId}. Call tabs to see open tabs.`);
   if (matches.length > 1) throw new Error(`Ambiguous prefix ${refId}. Use more characters.`);
