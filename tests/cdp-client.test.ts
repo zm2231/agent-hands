@@ -5,7 +5,7 @@ import type { CDPMessage, CDPTransport } from "../src/browser/cdp/types.js";
 class MemoryTransport implements CDPTransport {
   readonly sent: CDPMessage[] = [];
   private readonly messages = new Set<(message: CDPMessage) => void>();
-  private readonly closes = new Set<() => void>();
+  private readonly closes = new Set<(error?: Error) => void>();
 
   send(message: CDPMessage): void {
     this.sent.push(message);
@@ -15,7 +15,7 @@ class MemoryTransport implements CDPTransport {
     this.messages.add(handler);
   }
 
-  onClose(handler: () => void): void {
+  onClose(handler: (error?: Error) => void): void {
     this.closes.add(handler);
   }
 

@@ -96,7 +96,7 @@ By default the browser surface connects to Chrome over the remote-debugging port
    node host/manifest.mjs "$(pwd)/host/native-host.mjs" <extension-id> [<extension-id>...] > \
      ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.zmerchant.agenthands.json
    ```
-3. Run agent-hands with `AGENT_HANDS_BROWSER_TRANSPORT=extension`.
+3. Run agent-hands with `AGENT_HANDS_BROWSER_TRANSPORT=extension`, then reload the unpacked extension before calling `browser start`. The extension stops retrying after five unavailable-host attempts and releases its offscreen document, so reload it after starting a fresh agent-hands process.
 
 The CLI writes its socket path and a per-run auth token to `~/.config/agent-hands/browser-host.json` (mode `0600`) automatically; you do not create that file. With this transport, `browser start` attaches to your live tabs; it does not launch Chrome.
 

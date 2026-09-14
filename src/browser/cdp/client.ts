@@ -33,10 +33,10 @@ export function createCDPClient(transport: CDPTransport): CDPClient {
     }
   });
 
-  transport.onClose(() => {
+  transport.onClose((error) => {
     if (closed) return;
     closed = true;
-    rejectPending(new Error("CDP connection closed."));
+    rejectPending(error ?? new Error("CDP connection closed."));
     for (const handler of listeners.get("close") ?? []) handler({});
   });
 

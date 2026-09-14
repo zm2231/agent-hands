@@ -84,7 +84,7 @@ function attachFrames(socket: Socket, onMessage: (message: HostMessage) => boole
 
 class ExtensionTransport implements CDPTransport {
   private readonly messageHandlers = new Set<(message: CDPMessage) => void>();
-  private readonly closeHandlers = new Set<() => void>();
+  private readonly closeHandlers = new Set<(error?: Error) => void>();
   private closed = false;
 
   constructor(private readonly socket: Socket) {
@@ -127,7 +127,7 @@ class ExtensionTransport implements CDPTransport {
     this.messageHandlers.add(handler);
   }
 
-  onClose(handler: () => void): void {
+  onClose(handler: (error?: Error) => void): void {
     this.closeHandlers.add(handler);
   }
 

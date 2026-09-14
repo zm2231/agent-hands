@@ -79,4 +79,34 @@ describe("native browser host", () => {
 
     await expect(response).resolves.toEqual({ id: 7, kind: "control", op: "listTabs", ok: true, result: { tabs: [] } });
   });
+
+  it("fails closed on an oversized native frame", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const socketPath = join(directory, "host.sock");
+    const configDirectory = join(directory, "config", "agent-hands");
+    let browserSocket: Socket | undefined;
+    let resolveConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
+    const server = createServer((socket) => {
+      browserSocket = socket;
+      resolveConnected();
+    });
+    servers.add(server);
+    server.listen(socketPath);
+    await mkdir(configDirectory, { recursive: true });
+    await writeFile(join(configDirectory, "browser-host.json"), JSON.stringify({ socketPath, token: "test-token" }));
+
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, XDG_CONFIG_HOME: join(directory, "config") }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    await connected;
+    const oversized = Buffer.allocUnsafe(4);
+    oversized.writeUInt32LE(1024 * 1024 + 1, 0);
+    host.stdin.write(oversized);
+
+    await expect(new Promise<number | null>((resolve) => host.once("exit", (code) => resolve(code)))).resolves.toBe(1);
+    browserSocket?.destroy();
+  });
 });

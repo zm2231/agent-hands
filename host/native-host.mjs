@@ -19,14 +19,18 @@ function frame(value, maxBytes) {
 function readFrames(stream, maxBytes, handler) {
   let buffered = Buffer.alloc(0);
   stream.on("data", (chunk) => {
-    buffered = Buffer.concat([buffered, chunk]);
-    while (buffered.length >= 4) {
-      const size = buffered.readUInt32LE(0);
-      if (size > maxBytes) throw new Error("Native messaging frame exceeds its allowed size.");
-      if (buffered.length < size + 4) return;
-      const body = buffered.subarray(4, size + 4);
-      buffered = buffered.subarray(size + 4);
-      handler(JSON.parse(body.toString("utf8")));
+    try {
+      buffered = Buffer.concat([buffered, chunk]);
+      while (buffered.length >= 4) {
+        const size = buffered.readUInt32LE(0);
+        if (size > maxBytes) throw new Error("Native messaging frame exceeds its allowed size.");
+        if (buffered.length < size + 4) return;
+        const body = buffered.subarray(4, size + 4);
+        buffered = buffered.subarray(size + 4);
+        handler(JSON.parse(body.toString("utf8")));
+      }
+    } catch {
+      process.exit(1);
     }
   });
 }

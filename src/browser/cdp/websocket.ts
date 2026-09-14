@@ -1,5 +1,3 @@
-// Production CDP transport over WebSocket.
-
 import { WebSocket } from "ws";
 import { createCDPClient as createClient } from "./client.js";
 import type { CDPClient, CDPMessage, CDPTransport } from "./types.js";
@@ -9,7 +7,7 @@ export function createCDPClient(wsUrl: string): Promise<CDPClient> {
     const ws = new WebSocket(wsUrl);
     let closed = false;
     const messageHandlers = new Set<(message: CDPMessage) => void>();
-    const closeHandlers = new Set<() => void>();
+    const closeHandlers = new Set<(error?: Error) => void>();
 
     const transport: CDPTransport = {
       send(message) { ws.send(JSON.stringify(message)); },
@@ -29,7 +27,7 @@ export function createCDPClient(wsUrl: string): Promise<CDPClient> {
 
     ws.on("error", (err) => {
       if (!closed) reject(err);
-      for (const handler of closeHandlers) handler();
+      for (const handler of closeHandlers) handler(err);
     });
 
     ws.on("close", () => {

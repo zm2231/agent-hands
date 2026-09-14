@@ -1,9 +1,11 @@
 const sessions = new Map();
 let nativePort;
 let nativeTimer;
+let nativeAttempts = 0;
 
 const NATIVE_BACKOFF_MIN_MS = 1000;
 const NATIVE_BACKOFF_MAX_MS = 30000;
+const MAX_NATIVE_ATTEMPTS = 5;
 let nativeBackoff = NATIVE_BACKOFF_MIN_MS;
 
 async function ensureOffscreen() {
@@ -15,15 +17,30 @@ function send(message) {
   nativePort?.postMessage(message);
 }
 
+async function closeBrowserSession() {
+  for (const tabId of sessions.values()) await chrome.debugger.detach({ tabId }).catch(() => {});
+  sessions.clear();
+  await chrome.offscreen.closeDocument().catch(() => {});
+}
+
 function connectNative() {
-  if (nativePort) return;
+  if (nativePort || nativeTimer) return;
   const port = chrome.runtime.connectNative("com.zmerchant.agenthands");
   nativePort = port;
   nativeBackoff = NATIVE_BACKOFF_MIN_MS;
-  port.onMessage.addListener(handle);
+  port.onMessage.addListener((message) => {
+    nativeAttempts = 0;
+    void handle(message);
+  });
   port.onDisconnect.addListener(() => {
+    chrome.runtime.lastError?.message;
     if (nativePort !== port) return;
     nativePort = undefined;
+    nativeAttempts += 1;
+    if (nativeAttempts >= MAX_NATIVE_ATTEMPTS) {
+      void closeBrowserSession();
+      return;
+    }
     if (nativeTimer) return;
     const delay = nativeBackoff;
     nativeBackoff = Math.min(nativeBackoff * 2, NATIVE_BACKOFF_MAX_MS);
@@ -69,6 +86,12 @@ async function handle(message) {
       return;
     }
     if (message.kind === "cdp") {
+      if (!message.sessionId && message.method === "Target.createTarget") {
+        const tab = await chrome.tabs.create({ url: String(message.params?.url ?? "about:blank") });
+        if (tab.id === undefined) throw new Error("Chrome did not provide a tab id.");
+        send({ id: message.id, kind: "cdp", ok: true, result: { targetId: String(tab.id) } });
+        return;
+      }
       const tabId = sessions.get(message.sessionId);
       if (tabId === undefined) throw new Error("Unknown or detached browser session.");
       const result = await chrome.debugger.sendCommand({ tabId }, message.method, message.params ?? {});
