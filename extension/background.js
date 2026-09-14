@@ -27,9 +27,9 @@ function connectNative() {
   if (nativePort || nativeTimer) return;
   const port = chrome.runtime.connectNative("com.zmerchant.agenthands");
   nativePort = port;
-  nativeBackoff = NATIVE_BACKOFF_MIN_MS;
   port.onMessage.addListener((message) => {
     nativeAttempts = 0;
+    nativeBackoff = NATIVE_BACKOFF_MIN_MS;
     void handle(message);
   });
   port.onDisconnect.addListener(() => {
