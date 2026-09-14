@@ -192,7 +192,7 @@ export async function createExtensionConnection(): Promise<ExtensionConnection> 
       const timer = setTimeout(() => reject(new Error(`Timed out waiting for the agent-hands Chrome extension. Load extension/ unpacked and register host/native-host.mjs as com.zmerchant.agenthands.`)), CONNECTION_TIMEOUT_MS);
       server = createServer((candidate) => {
         if (socket) {
-          candidate.destroy(new Error("Browser host already connected."));
+          candidate.destroy();
           return;
         }
         attachFrames(candidate, (message) => {
