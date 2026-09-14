@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMPUTER_USE_PLUGIN_ROOT, type BrokerComponents } from "./verify.js";
+import { validateOfficialToolInventory } from "./official-schemas.js";
 import type { ContentBlock } from "../../kernel/types.js";
 
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
@@ -176,19 +177,7 @@ export class BrokerSession {
       const cuServer = inventoryData.find((s: any) => s.name === "computer-use");
       if (!cuServer) throw new Error("Inventory missing computer-use server.");
 
-      const expectedMethods = [
-        "click", "drag", "get_app_state", "list_apps", "perform_secondary_action",
-        "press_key", "scroll", "select_text", "set_value", "type_text",
-      ];
-      if (!cuServer.tools || typeof cuServer.tools !== "object") {
-        throw new Error("Inventory computer-use server exposed no tool table.");
-      }
-      const toolNames = Object.keys(cuServer.tools as Record<string, unknown>).sort();
-      if (JSON.stringify(toolNames) !== JSON.stringify(expectedMethods)) {
-        throw new Error(
-          `Inventory tool mismatch. Expected: ${expectedMethods.join(",")}; got: ${toolNames.join(",")}`
-        );
-      }
+      validateOfficialToolInventory(cuServer.tools);
     } catch (err) {
       await this.close();
       throw err;
