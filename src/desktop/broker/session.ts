@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMPUTER_USE_PLUGIN_ROOT, type BrokerComponents } from "./verify.js";
+import { validateOfficialToolInventory } from "./official-schemas.js";
 import type { ContentBlock } from "../../kernel/types.js";
 
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
@@ -20,6 +21,7 @@ export interface SessionCallResult {
   isError: boolean;
   modelTurnsStarted: number;
   ephemeralThread: boolean;
+  elicitationRequests: number;
 }
 
 export class BrokerSession {
@@ -56,6 +58,7 @@ export class BrokerSession {
   private closed = false;
   private callActive = false;
   private _onClose: (() => void) | null = null;
+  private activatedApps = new Set<string>();
   readonly components: BrokerComponents;
 
   constructor(components: BrokerComponents) {
@@ -68,6 +71,14 @@ export class BrokerSession {
 
   set onClose(cb: () => void) {
     this._onClose = cb;
+  }
+
+  isAppActivated(app: string): boolean {
+    return this.activatedApps.has(app);
+  }
+
+  markAppActivated(app: string): void {
+    this.activatedApps.add(app);
   }
 
   async start(): Promise<void> {
@@ -176,19 +187,7 @@ export class BrokerSession {
       const cuServer = inventoryData.find((s: any) => s.name === "computer-use");
       if (!cuServer) throw new Error("Inventory missing computer-use server.");
 
-      const expectedMethods = [
-        "click", "drag", "get_app_state", "list_apps", "perform_secondary_action",
-        "press_key", "scroll", "select_text", "set_value", "type_text",
-      ];
-      if (!cuServer.tools || typeof cuServer.tools !== "object") {
-        throw new Error("Inventory computer-use server exposed no tool table.");
-      }
-      const toolNames = Object.keys(cuServer.tools as Record<string, unknown>).sort();
-      if (JSON.stringify(toolNames) !== JSON.stringify(expectedMethods)) {
-        throw new Error(
-          `Inventory tool mismatch. Expected: ${expectedMethods.join(",")}; got: ${toolNames.join(",")}`
-        );
-      }
+      validateOfficialToolInventory(cuServer.tools);
     } catch (err) {
       await this.close();
       throw err;
@@ -214,13 +213,14 @@ export class BrokerSession {
 
         try {
           const turnsBeforeCall = this.modelTurnsStarted;
+          let elicitationRequests = 0;
 
           const raw = await this.request("mcpServer/tool/call", {
             threadId: this.threadId,
             server: "computer-use",
             tool: method,
             arguments: args,
-          }, opts.timeoutMs ?? 120_000, opts.onElicitation);
+          }, opts.timeoutMs ?? 120_000, opts.onElicitation, () => { elicitationRequests++; });
 
           if (this.modelTurnsStarted > turnsBeforeCall) {
             await this.close();
@@ -241,6 +241,7 @@ export class BrokerSession {
             isError,
             modelTurnsStarted: 0,
             ephemeralThread: true,
+            elicitationRequests,
           };
         } catch (err) {
           // Only tear down on transport/protocol failures, not broker action errors.
@@ -374,6 +375,7 @@ export class BrokerSession {
     params: Record<string, unknown>,
     timeoutMs: number,
     onElicitation?: (params: Record<string, unknown>) => Promise<{ action: string }>,
+    onElicitationRequest?: () => void,
   ): Promise<Record<string, unknown>> {
     const id = this.nextId++;
     this.send({ method: reqMethod, id, params });
@@ -391,6 +393,7 @@ export class BrokerSession {
       }
 
       if (msg.method === "mcpServer/elicitation/request" && msg.id != null) {
+        onElicitationRequest?.();
         let action = "cancel";
         if (onElicitation) {
           const elicitRemaining = deadline - Date.now();

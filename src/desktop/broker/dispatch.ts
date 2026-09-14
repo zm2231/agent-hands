@@ -17,6 +17,8 @@ export interface BrokerResult {
   ephemeralThread: boolean;
   followUpResults?: BrokerResult[];
   contentOmitted?: boolean;
+  directCalls: number;
+  elicitationRequests: number;
 }
 
 export function applyAggregateBudget(
@@ -50,17 +52,47 @@ export async function brokerDispatch(
     onElicitation?: (params: Record<string, unknown>) => Promise<{ action: string }>;
     followUpCalls?: FollowUpCall[];
     continueOnError?: boolean;
+    requireActivationFor?: string;
   } = {}
 ): Promise<BrokerResult> {
   const lease = await acquireSession(components);
 
   try {
     const session = lease.session;
+    let directCalls = 0;
+    let elicitationRequests = 0;
+    if (options.requireActivationFor && !session.isAppActivated(options.requireActivationFor)) {
+      const activation = await session.call("get_app_state", { app: options.requireActivationFor }, {
+        signal: options.signal,
+        timeoutMs: options.toolTimeoutMs,
+        onElicitation: options.onElicitation,
+      });
+      directCalls++;
+      elicitationRequests += activation.elicitationRequests;
+      if (activation.isError) {
+        return {
+          content: activation.content,
+          structuredContent: activation.structuredContent,
+          isError: true,
+          modelTurnsStarted: activation.modelTurnsStarted,
+          ephemeralThread: activation.ephemeralThread,
+          followUpResults: [],
+          directCalls,
+          elicitationRequests,
+        };
+      }
+      session.markAppActivated(options.requireActivationFor);
+    }
     const primary = await session.call(method, args, {
       signal: options.signal,
       timeoutMs: options.toolTimeoutMs,
       onElicitation: options.onElicitation,
     });
+    directCalls++;
+    elicitationRequests += primary.elicitationRequests;
+    if (method === "get_app_state" && typeof args.app === "string" && !primary.isError) {
+      session.markAppActivated(args.app);
+    }
 
     const content = primary.content;
     const isError = primary.isError;
@@ -69,7 +101,8 @@ export async function brokerDispatch(
     let aggregateContentBytes = Buffer.byteLength(JSON.stringify(content), "utf8");
     const followUpResults: BrokerResult[] = [];
     const shouldRunFollowUps = options.followUpCalls?.length &&
-      (!isError || options.continueOnError);
+      (!isError || options.continueOnError) &&
+      !(method === "get_app_state" && isError);
 
     if (shouldRunFollowUps) {
       for (const followUp of options.followUpCalls!) {
@@ -78,6 +111,11 @@ export async function brokerDispatch(
           timeoutMs: options.toolTimeoutMs,
           onElicitation: options.onElicitation,
         });
+        directCalls++;
+        elicitationRequests += fuResult.elicitationRequests;
+        if (followUp.tool === "get_app_state" && typeof followUp.arguments.app === "string" && !fuResult.isError) {
+          session.markAppActivated(followUp.arguments.app);
+        }
 
         const fuContent = fuResult.content;
         const fuIsError = fuResult.isError;
@@ -95,12 +133,16 @@ export async function brokerDispatch(
               modelTurnsStarted: 0,
               ephemeralThread: true,
               contentOmitted: true,
+              directCalls: 1,
+              elicitationRequests: fuResult.elicitationRequests,
             }
           : {
               content: fuContent,
               isError: fuIsError,
               modelTurnsStarted: 0,
               ephemeralThread: true,
+              directCalls: 1,
+              elicitationRequests: fuResult.elicitationRequests,
             }
         );
         if (!overBudget) aggregateContentBytes += fuContentBytes;
@@ -116,6 +158,8 @@ export async function brokerDispatch(
       modelTurnsStarted: primary.modelTurnsStarted,
       ephemeralThread: true,
       followUpResults,
+      directCalls,
+      elicitationRequests,
     };
   } finally {
     lease.release();
