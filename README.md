@@ -1,8 +1,7 @@
 # agent-hands
 
 [![npm version](https://img.shields.io/npm/v/@zmerchant/agent-hands?logo=npm&color=cb3837)](https://www.npmjs.com/package/@zmerchant/agent-hands)
-[![npm downloads](https://img.shields.io/npm/dm/@zmerchant/agent-hands?logo=npm&color=cb3837)](https://www.npmjs.com/package/@zmerchant/agent-hands)
-[![provenance](https://img.shields.io/badge/provenance-SLSA%20v1-brightgreen?logo=github)](https://www.npmjs.com/package/@zmerchant/agent-hands#provenance)
+[![macOS](https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white)](https://www.npmjs.com/package/@zmerchant/agent-hands)
 
 Gives your agent hands. Real ones.
 
