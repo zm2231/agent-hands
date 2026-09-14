@@ -21,6 +21,7 @@ export interface SessionCallResult {
   isError: boolean;
   modelTurnsStarted: number;
   ephemeralThread: boolean;
+  elicitationRequests: number;
 }
 
 export class BrokerSession {
@@ -57,6 +58,7 @@ export class BrokerSession {
   private closed = false;
   private callActive = false;
   private _onClose: (() => void) | null = null;
+  private activatedApps = new Set<string>();
   readonly components: BrokerComponents;
 
   constructor(components: BrokerComponents) {
@@ -69,6 +71,14 @@ export class BrokerSession {
 
   set onClose(cb: () => void) {
     this._onClose = cb;
+  }
+
+  isAppActivated(app: string): boolean {
+    return this.activatedApps.has(app);
+  }
+
+  markAppActivated(app: string): void {
+    this.activatedApps.add(app);
   }
 
   async start(): Promise<void> {
@@ -203,13 +213,14 @@ export class BrokerSession {
 
         try {
           const turnsBeforeCall = this.modelTurnsStarted;
+          let elicitationRequests = 0;
 
           const raw = await this.request("mcpServer/tool/call", {
             threadId: this.threadId,
             server: "computer-use",
             tool: method,
             arguments: args,
-          }, opts.timeoutMs ?? 120_000, opts.onElicitation);
+          }, opts.timeoutMs ?? 120_000, opts.onElicitation, () => { elicitationRequests++; });
 
           if (this.modelTurnsStarted > turnsBeforeCall) {
             await this.close();
@@ -230,6 +241,7 @@ export class BrokerSession {
             isError,
             modelTurnsStarted: 0,
             ephemeralThread: true,
+            elicitationRequests,
           };
         } catch (err) {
           // Only tear down on transport/protocol failures, not broker action errors.
@@ -363,6 +375,7 @@ export class BrokerSession {
     params: Record<string, unknown>,
     timeoutMs: number,
     onElicitation?: (params: Record<string, unknown>) => Promise<{ action: string }>,
+    onElicitationRequest?: () => void,
   ): Promise<Record<string, unknown>> {
     const id = this.nextId++;
     this.send({ method: reqMethod, id, params });
@@ -380,6 +393,7 @@ export class BrokerSession {
       }
 
       if (msg.method === "mcpServer/elicitation/request" && msg.id != null) {
+        onElicitationRequest?.();
         let action = "cancel";
         if (onElicitation) {
           const elicitRemaining = deadline - Date.now();
