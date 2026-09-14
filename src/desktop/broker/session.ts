@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { COMPUTER_USE_PLUGIN_ROOT, type BrokerComponents } from "./verify.js";
 import { validateOfficialToolInventory } from "./official-schemas.js";
@@ -122,7 +123,7 @@ export class BrokerSession {
         "-c", 'otel.exporter="none"',
         "-c", 'web_search="disabled"',
         "-c", 'history.persistence="none"',
-        "-c", `mcp_servers={"computer-use" = { command = ${JSON.stringify(this.components.clientPath)}, args = ["mcp"], cwd = ${JSON.stringify(this.workDir)}, enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120 }}`,
+        "-c", `mcp_servers={"computer-use" = { command = ${JSON.stringify(process.execPath)}, args = [${JSON.stringify(join(dirname(fileURLToPath(import.meta.url)), "cua-proxy.js"))}, ${JSON.stringify(this.components.clientPath)}, "mcp"], cwd = ${JSON.stringify(this.workDir)}, enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120 }}`,
         "-c", "plugins={}",
       ];
 
