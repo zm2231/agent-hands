@@ -1,5 +1,9 @@
 # agent-hands
 
+[![npm version](https://img.shields.io/npm/v/@zmerchant/agent-hands?logo=npm&color=cb3837)](https://www.npmjs.com/package/@zmerchant/agent-hands)
+[![npm downloads](https://img.shields.io/npm/dm/@zmerchant/agent-hands?logo=npm&color=cb3837)](https://www.npmjs.com/package/@zmerchant/agent-hands)
+[![provenance](https://img.shields.io/badge/provenance-SLSA%20v1-brightgreen?logo=github)](https://www.npmjs.com/package/@zmerchant/agent-hands#provenance)
+
 Gives your agent hands. Real ones.
 
 OpenAI built the best computer use out of any model and kept it locked inside Codex. agent-hands takes that same signed binary and exposes it as a standard MCP server. Claude, Hermes, OpenClaw, whatever agent you use; it can now see your screen, click buttons, type text, scroll through apps, and drive your actual logged-in Chrome. The full desktop and browser, not a sandbox.
