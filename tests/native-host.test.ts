@@ -1,0 +1,82 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { createServer, type Socket } from "node:net";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
+
+function frame(value: unknown): Buffer {
+  const body = Buffer.from(JSON.stringify(value));
+  const result = Buffer.allocUnsafe(body.length + 4);
+  result.writeUInt32LE(body.length, 0);
+  body.copy(result, 4);
+  return result;
+}
+
+function receive(stream: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let buffered = Buffer.alloc(0);
+    const onData = (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      if (buffered.length < 4) return;
+      const size = buffered.readUInt32LE(0);
+      if (buffered.length < size + 4) return;
+      cleanup();
+      resolve(JSON.parse(buffered.subarray(4, size + 4).toString("utf8")) as Record<string, unknown>);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      stream.off("data", onData);
+      stream.off("error", onError);
+    };
+    stream.on("data", onData);
+    stream.on("error", onError);
+  });
+}
+
+describe("native browser host", () => {
+  const processes: ChildProcess[] = [];
+  const servers = new Set<ReturnType<typeof createServer>>();
+  const directories: string[] = [];
+
+  afterEach(async () => {
+    for (const process of processes.splice(0)) process.kill();
+    for (const server of servers) await new Promise<void>((resolve) => server.close(() => resolve()));
+    servers.clear();
+    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  });
+
+  it("authenticates and relays length-prefixed native messages", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const socketPath = join(directory, "host.sock");
+    const configDirectory = join(directory, "config", "agent-hands");
+    const token = "test-token";
+    let browserSocket: Socket | undefined;
+    const authenticated = new Promise<void>((resolve, reject) => {
+      const server = createServer((socket) => {
+        browserSocket = socket;
+        void receive(socket).then((message) => {
+          expect(message).toEqual({ kind: "auth", token });
+          resolve();
+        }, reject);
+      });
+      servers.add(server);
+      server.listen(socketPath);
+    });
+    await mkdir(configDirectory, { recursive: true });
+    await writeFile(join(configDirectory, "browser-host.json"), JSON.stringify({ socketPath, token }));
+
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, XDG_CONFIG_HOME: join(directory, "config") }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    await authenticated;
+    const response = receive(host.stdout);
+
+    browserSocket!.write(frame({ id: 7, kind: "control", op: "listTabs", ok: true, result: { tabs: [] } }));
+
+    await expect(response).resolves.toEqual({ id: 7, kind: "control", op: "listTabs", ok: true, result: { tabs: [] } });
+  });
+});

@@ -3,6 +3,7 @@
 import type { SurfaceDescriptor, ToolDefinition, ToolResult, CallContext, SurfaceStatus, ContentBlock } from "../kernel/types.js";
 import { discoverEndpoint } from "./cdp/discovery.js";
 import { createCDPClient } from "./cdp/websocket.js";
+import { createExtensionConnection } from "./cdp/extension.js";
 import type { CDPClient } from "./cdp/types.js";
 import { TabBridge } from "./tab-bridge.js";
 import { takeSnapshot } from "./snapshot.js";
@@ -45,14 +46,23 @@ const ACTION_FIELDS: Record<string, Set<string>> = {
 
 // Session state.
 let rootCDP: CDPClient | null = null;
+let extensionConnection: Awaited<ReturnType<typeof createExtensionConnection>> | null = null;
 const bridges = new Map<string, TabBridge>(); // targetId -> TabBridge
 
 async function ensureRoot(): Promise<CDPClient> {
   if (rootCDP) return rootCDP;
-  const wsUrl = await discoverEndpoint();
-  rootCDP = await createCDPClient(wsUrl);
+  if (process.env.AGENT_HANDS_BROWSER_TRANSPORT === "extension") {
+    extensionConnection = await createExtensionConnection();
+    rootCDP = extensionConnection.client;
+  } else {
+    const wsUrl = await discoverEndpoint();
+    rootCDP = await createCDPClient(wsUrl);
+  }
   rootCDP.on("close", () => {
     rootCDP = null;
+    const connection = extensionConnection;
+    extensionConnection = null;
+    void connection?.close();
     // Close all stale bridges on root disconnect.
     for (const b of bridges.values()) b.close();
     bridges.clear();
@@ -199,6 +209,7 @@ async function handleSingleAction(
       await ensureRoot();
       return { result: "Browser already attached." };
     } catch (e: unknown) {
+      if (process.env.AGENT_HANDS_BROWSER_TRANSPORT === "extension") throw e;
       throw new Error(
         "Automatic browser launch requires a Linux systemd session. " +
           "Start your browser with --remote-debugging-port=9222."

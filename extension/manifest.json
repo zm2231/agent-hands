@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "agent-hands Chrome Control",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvAn7VdDZL16LVtnh2bEfGZRXtr/vVby+bs5cdb2Su4URPGgAw3qx45NHxB2B1gEKlB8JZy9w8JV3LuaIkT/18aEwrtLI3/++z49Y1rQXhCq8+4nY9phHR9RMILkF3IHnqxRUKiOn3ztI4xjHzcvVKEGXqn/6aE92CZk8o1Ir7wKonIYw+X+wA72sxetwFF7wNN4kFZ2z0TKBLT5a5WvTOMTi/T5Tk9dL/AkCtduTCHNDisMDNTz5ZQsnraNHWsDc4OiMjnrYAH3PLtrnIj/ZaB1ZtYXic7jqbtU4UcxlZxFqIOWgWhczbIcwsQW5OhG6VoiH9Yridlg0CAowsZyUnwIDAQAB",
+  "permissions": ["debugger", "nativeMessaging", "offscreen", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "agent-hands Chrome Control" }
+}

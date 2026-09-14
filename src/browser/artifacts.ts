@@ -65,7 +65,7 @@ async function sweepExpired(): Promise<void> {
       try {
         const s = await stat(filepath);
         const age = now - s.mtimeMs;
-        if (file.endsWith(".png") && age > SCREENSHOT_TTL_MS) {
+        if ((file.endsWith(".jpg") || file.endsWith(".png")) && age > SCREENSHOT_TTL_MS) {
           await unlink(filepath).catch(() => {});
         } else if (file.startsWith("result-") && file.endsWith(".txt") && age > RESULT_TTL_MS) {
           await unlink(filepath).catch(() => {});
@@ -89,7 +89,7 @@ export async function saveScreenshot(
   const parts = ["browser", safeRef(refId)];
   if (elementId != null) parts.push("element", String(elementId));
   parts.push(randomUUID());
-  const filename = parts.join("-") + ".png";
+  const filename = parts.join("-") + ".jpg";
   const filepath = join(dir, filename);
   await writeFile(filepath, data, { mode: 0o600 });
   return filepath;
