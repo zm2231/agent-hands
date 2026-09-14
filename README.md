@@ -100,6 +100,8 @@ By default the browser surface connects to Chrome over the remote-debugging port
 
 The CLI writes its socket path and a per-run auth token to `~/.config/agent-hands/browser-host.json` (mode `0600`) automatically; you do not create that file. With this transport, `browser start` attaches to your live tabs; it does not launch Chrome.
 
+The native host reads one active controller configuration, so run one extension-transport agent-hands server at a time.
+
 ## Configuration
 
 Only enable the surface you need:

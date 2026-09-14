@@ -76,6 +76,12 @@ async function handle(message) {
       send({ id: message.id, kind: "control", op: "attach", ok: true, result: { sessionId } });
       return;
     }
+    if (message.kind === "control" && message.op === "createTarget") {
+      const tab = await chrome.tabs.create({ url: String(message.url ?? "about:blank") });
+      if (tab.id === undefined) throw new Error("Chrome did not provide a tab id.");
+      send({ id: message.id, kind: "control", op: "createTarget", ok: true, result: { targetId: String(tab.id) } });
+      return;
+    }
     if (message.kind === "control" && message.op === "detach") {
       const tabId = sessions.get(message.sessionId);
       if (tabId !== undefined) {
@@ -86,12 +92,6 @@ async function handle(message) {
       return;
     }
     if (message.kind === "cdp") {
-      if (!message.sessionId && message.method === "Target.createTarget") {
-        const tab = await chrome.tabs.create({ url: String(message.params?.url ?? "about:blank") });
-        if (tab.id === undefined) throw new Error("Chrome did not provide a tab id.");
-        send({ id: message.id, kind: "cdp", ok: true, result: { targetId: String(tab.id) } });
-        return;
-      }
       const tabId = sessions.get(message.sessionId);
       if (tabId === undefined) throw new Error("Unknown or detached browser session.");
       const result = await chrome.debugger.sendCommand({ tabId }, message.method, message.params ?? {});

@@ -17,10 +17,11 @@ type HostMessage = {
   result?: Record<string, unknown>;
   error?: { code?: number | string; message: string };
   ok?: boolean;
-  op?: "listTabs" | "attach" | "detach";
+  op?: "listTabs" | "attach" | "detach" | "createTarget";
   sessionId?: string;
   tabId?: number;
   token?: string;
+  url?: string;
 };
 
 export interface ExtensionTab {
@@ -111,6 +112,13 @@ class ExtensionTransport implements CDPTransport {
       envelope.kind = "control";
       envelope.op = "attach";
       envelope.tabId = Number(message.params?.targetId);
+      delete envelope.method;
+      delete envelope.params;
+      delete envelope.sessionId;
+    } else if (message.method === "Target.createTarget") {
+      envelope.kind = "control";
+      envelope.op = "createTarget";
+      envelope.url = String(message.params?.url ?? "about:blank");
       delete envelope.method;
       delete envelope.params;
       delete envelope.sessionId;

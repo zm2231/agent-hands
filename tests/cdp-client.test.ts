@@ -27,8 +27,8 @@ class MemoryTransport implements CDPTransport {
     for (const handler of this.messages) handler(message);
   }
 
-  disconnect(): void {
-    for (const handler of this.closes) handler();
+  disconnect(error?: Error): void {
+    for (const handler of this.closes) handler(error);
   }
 }
 
@@ -57,5 +57,15 @@ describe("transport-agnostic CDP client", () => {
     transport.disconnect();
 
     await expect(response).rejects.toThrow("CDP connection closed.");
+  });
+
+  it("preserves a transport error for an in-flight request", async () => {
+    const transport = new MemoryTransport();
+    const client = createCDPClient(transport);
+    const response = client.send("Page.enable");
+
+    transport.disconnect(new Error("WebSocket reset by peer."));
+
+    await expect(response).rejects.toThrow("WebSocket reset by peer.");
   });
 });
