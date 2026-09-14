@@ -1,5 +1,10 @@
 const sessions = new Map();
-let hostPort;
+let nativePort;
+let nativeTimer;
+
+const NATIVE_BACKOFF_MIN_MS = 1000;
+const NATIVE_BACKOFF_MAX_MS = 30000;
+let nativeBackoff = NATIVE_BACKOFF_MIN_MS;
 
 async function ensureOffscreen() {
   const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"], documentUrls: [chrome.runtime.getURL("offscreen.html")] });
@@ -7,7 +12,26 @@ async function ensureOffscreen() {
 }
 
 function send(message) {
-  hostPort?.postMessage(message);
+  nativePort?.postMessage(message);
+}
+
+function connectNative() {
+  if (nativePort) return;
+  const port = chrome.runtime.connectNative("com.zmerchant.agenthands");
+  nativePort = port;
+  nativeBackoff = NATIVE_BACKOFF_MIN_MS;
+  port.onMessage.addListener(handle);
+  port.onDisconnect.addListener(() => {
+    if (nativePort !== port) return;
+    nativePort = undefined;
+    if (nativeTimer) return;
+    const delay = nativeBackoff;
+    nativeBackoff = Math.min(nativeBackoff * 2, NATIVE_BACKOFF_MAX_MS);
+    nativeTimer = setTimeout(() => {
+      nativeTimer = undefined;
+      connectNative();
+    }, delay);
+  });
 }
 
 async function listTabs() {
@@ -60,9 +84,8 @@ async function handle(message) {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-hands-offscreen") return;
-  hostPort = port;
-  port.onMessage.addListener(handle);
-  port.onDisconnect.addListener(() => { if (hostPort === port) hostPort = undefined; });
+  port.onMessage.addListener(() => connectNative());
+  connectNative();
 });
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -79,4 +102,4 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   }
 });
 
-ensureOffscreen();
+void ensureOffscreen().then(connectNative);
