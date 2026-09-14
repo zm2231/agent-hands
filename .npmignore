@@ -6,3 +6,6 @@ tsconfig.json
 vitest.config.*
 .gitignore
 .github/
+release-please-config.json
+.release-please-manifest.json
+RELEASING.md
