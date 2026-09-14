@@ -11,7 +11,12 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "node --experimental-vm-modules node_modules/.bin/vitest run",
-    "test:watch": "node --experimental-vm-modules node_modules/.bin/vitest"
+    "test:watch": "node --experimental-vm-modules node_modules/.bin/vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "engines": {
     "node": ">=22"
@@ -29,9 +34,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/softaworks/agent-hands.git"
+    "url": "git+https://github.com/zm2231/agent-hands.git"
   },
-  "homepage": "https://github.com/softaworks/agent-hands",
+  "homepage": "https://github.com/zm2231/agent-hands#readme",
+  "bugs": {
+    "url": "https://github.com/zm2231/agent-hands/issues"
+  },
   "keywords": [
     "mcp",
     "computer-use",
