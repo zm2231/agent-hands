@@ -16,32 +16,34 @@ Both run through standard MCP (stdio), so any agent that speaks the protocol can
 
 ## Setup
 
-```bash
-npx @zmerchant/agent-hands
-```
-
-Or install from source:
-
-```bash
-git clone https://github.com/softaworks/agent-hands.git
-cd agent-hands
-npm install && npm run build
-```
-
 Add to your agent's MCP config:
 
 ```json
 {
   "mcpServers": {
     "agent-hands": {
-      "command": "node",
-      "args": ["/path/to/agent-hands/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@zmerchant/agent-hands@latest"]
     }
   }
 }
 ```
 
-Your agent now has hands.
+`npx` fetches the package on first run and caches it. Your agent now has hands.
+
+### Updating
+
+With the `@latest` config above, restart your agent (the MCP server process) and `npx` pulls the newest published version. There is no separate update command. To pin a version instead, replace `@latest` with `@0.3.1`; you then update by bumping that number.
+
+### From source instead
+
+```bash
+git clone https://github.com/zm2231/agent-hands.git
+cd agent-hands
+npm install && npm run build
+```
+
+Then point the config at the local build (`"command": "node", "args": ["/path/to/agent-hands/dist/index.js"]`). A source checkout does not auto-update; `git pull && npm run build` to update.
 
 ### What you need installed
 
