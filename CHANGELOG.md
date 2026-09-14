@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.3.2...agent-hands-v0.3.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **broker:** strip codex/auth-change so Computer Use connects on codex 0.154 ([#5](https://github.com/zm2231/agent-hands/issues/5)) ([4873acf](https://github.com/zm2231/agent-hands/commit/4873acf75d2e121aeb227586bf5646e6776e8554))
+
 ## [0.3.2](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.3.1...agent-hands-v0.3.2) (2026-09-14)
 
 
