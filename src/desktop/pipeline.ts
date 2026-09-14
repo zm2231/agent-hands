@@ -9,8 +9,6 @@ import { normalizeKey } from "./os/key-normalize.js";
 import { verifyBrokerComponents } from "./broker/verify.js";
 import { brokerDispatch } from "./broker/dispatch.js";
 
-/** Track which apps have been activated (get_app_state called) in this session. */
-const activatedApps = new Set<string>();
 import { sanitizeError } from "../kernel/sanitize.js";
 import { trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
 import { tmpdir } from "node:os";
@@ -81,18 +79,7 @@ export async function executePipeline(
       ? [{ tool: "get_app_state", arguments: { app: bundleId } }]
       : [];
 
-    // Auto-activate: if this is a mutation and the app hasn't been activated
-    // in this session, prepend get_app_state to establish the CUA context.
     const isMutationCall = method !== "list_apps" && method !== "get_app_state";
-    if (isMutationCall && bundleId && !activatedApps.has(bundleId)) {
-      try {
-        await brokerDispatch(components, "get_app_state", { app: bundleId }, {
-          signal: ctx.signal,
-        });
-      } catch { /* activation failed, try the mutation anyway */ }
-      activatedApps.add(bundleId);
-    }
-
     const result = await brokerDispatch(components, method, cleanArgs, {
       signal: ctx.signal,
       onElicitation: async (params) => {
@@ -100,6 +87,7 @@ export async function executePipeline(
         return { action: resp.action };
       },
       followUpCalls,
+      requireActivationFor: isMutationCall ? bundleId ?? undefined : undefined,
     });
 
     // Assert zero-turn architecture.
@@ -120,9 +108,10 @@ export async function executePipeline(
       permissionMode: "no-permissions",
       app: bundleId,
       outcome,
-      directCalls: 1 + (result.followUpResults?.length ?? 0),
+      directCalls: result.directCalls,
       modelTurnsStarted: 0,
       ephemeralRuntimeContext: true,
+      elicitationRequests: result.elicitationRequests,
       brokerVersion: components.codexVersion,
       clientBuild: components.clientBuild,
       durationMs: Date.now() - new Date(startedAt).getTime(),
@@ -143,7 +132,8 @@ export async function executePipeline(
       durationMs: details.durationMs,
       brokerVersion: components.codexVersion,
       clientBuild: components.clientBuild,
-      directCalls: 1,
+      directCalls: result.directCalls,
+      elicitationRequests: result.elicitationRequests,
       modelTurnsStarted: 0,
       ephemeralThread: true,
       brokerCleanupVerified: true,
@@ -188,13 +178,9 @@ export async function executePipeline(
     }
     responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
 
-    // Mark app as activated after successful get_app_state.
-    if (method === "get_app_state" && bundleId && !result.isError) {
-      activatedApps.add(bundleId);
-    }
-
     return {
       content: responseContent,
+      structuredContent: details,
       isError: result.isError,
     };
   } catch (e: unknown) {
@@ -323,8 +309,6 @@ export async function executeBatchPipeline(
     if (normalized[0].method !== "get_app_state" && normalized[0].method !== "list_apps") {
       normalized.unshift({ method: "get_app_state", args: { app: bundleId } });
     }
-    if (bundleId) activatedApps.add(bundleId);
-
     const [primary, ...rest] = normalized;
 
     // Build follow-up calls for brokerDispatch.
