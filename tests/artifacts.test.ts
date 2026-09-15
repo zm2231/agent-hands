@@ -30,9 +30,9 @@ describe("artifacts", () => {
   });
 
   it("saves screenshots to disk", async () => {
-    const path = await saveScreenshot(Buffer.from("fakepng"), "ABCDEF12");
+    const path = await saveScreenshot(Buffer.from("fakejpeg"), "ABCDEF12");
     expect(path).toContain("browser-");
-    expect(path).toContain(".png");
+    expect(path).toContain(".jpg");
     // Clean up.
     await unlink(path).catch(() => {});
   });

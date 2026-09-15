@@ -3,6 +3,8 @@
 import type { SurfaceDescriptor, ToolDefinition, ToolResult, CallContext, SurfaceStatus, ContentBlock } from "../kernel/types.js";
 import { discoverEndpoint } from "./cdp/discovery.js";
 import { createCDPClient } from "./cdp/websocket.js";
+import { createExtensionConnection } from "./cdp/extension.js";
+import { hasNativeMessagingHostManifest } from "./cdp/manifest.js";
 import type { CDPClient } from "./cdp/types.js";
 import { TabBridge } from "./tab-bridge.js";
 import { takeSnapshot } from "./snapshot.js";
@@ -45,14 +47,55 @@ const ACTION_FIELDS: Record<string, Set<string>> = {
 
 // Session state.
 let rootCDP: CDPClient | null = null;
+let extensionConnection: Awaited<ReturnType<typeof createExtensionConnection>> | null = null;
 const bridges = new Map<string, TabBridge>(); // targetId -> TabBridge
+
+const AUTO_EXTENSION_TIMEOUT_MS = 3_000;
+
+type RootConnection = { client: CDPClient; extensionConnection: Awaited<ReturnType<typeof createExtensionConnection>> | null };
+type RootConnectionDeps = {
+  hasManifest(): Promise<boolean>;
+  connectExtension(timeoutMs: number): ReturnType<typeof createExtensionConnection>;
+  connectTcp(): Promise<CDPClient>;
+};
+
+const defaultRootConnectionDeps: RootConnectionDeps = {
+  hasManifest: hasNativeMessagingHostManifest,
+  connectExtension: createExtensionConnection,
+  async connectTcp() {
+    return createCDPClient(await discoverEndpoint());
+  },
+};
+
+export async function selectRootConnection(
+  mode: string | undefined,
+  deps: RootConnectionDeps = defaultRootConnectionDeps,
+): Promise<RootConnection> {
+  if (mode === "tcp") return { client: await deps.connectTcp(), extensionConnection: null };
+  if (mode === "extension") {
+    const connection = await deps.connectExtension(60_000);
+    return { client: connection.client, extensionConnection: connection };
+  }
+  if (mode !== undefined) throw new Error("AGENT_HANDS_BROWSER_TRANSPORT must be tcp or extension.");
+  if (!await deps.hasManifest()) return { client: await deps.connectTcp(), extensionConnection: null };
+  try {
+    const connection = await deps.connectExtension(AUTO_EXTENSION_TIMEOUT_MS);
+    return { client: connection.client, extensionConnection: connection };
+  } catch {
+    return { client: await deps.connectTcp(), extensionConnection: null };
+  }
+}
 
 async function ensureRoot(): Promise<CDPClient> {
   if (rootCDP) return rootCDP;
-  const wsUrl = await discoverEndpoint();
-  rootCDP = await createCDPClient(wsUrl);
+  const selected = await selectRootConnection(process.env.AGENT_HANDS_BROWSER_TRANSPORT);
+  rootCDP = selected.client;
+  extensionConnection = selected.extensionConnection;
   rootCDP.on("close", () => {
     rootCDP = null;
+    const connection = extensionConnection;
+    extensionConnection = null;
+    void connection?.close();
     // Close all stale bridges on root disconnect.
     for (const b of bridges.values()) b.close();
     bridges.clear();
@@ -79,6 +122,8 @@ function computeRefId(targetId: string, allTargetIds: string[]): string {
 }
 
 function resolveTargetId(refId: string, pages: Array<{ targetId: string }>): string {
+  const exact = pages.find((p) => p.targetId === refId);
+  if (exact) return exact.targetId;
   const matches = pages.filter((p) => p.targetId.startsWith(refId));
   if (matches.length === 0) throw new Error(`No target matching prefix ${refId}. Call tabs to see open tabs.`);
   if (matches.length > 1) throw new Error(`Ambiguous prefix ${refId}. Use more characters.`);
@@ -199,6 +244,7 @@ async function handleSingleAction(
       await ensureRoot();
       return { result: "Browser already attached." };
     } catch (e: unknown) {
+      if (process.env.AGENT_HANDS_BROWSER_TRANSPORT === "extension") throw e;
       throw new Error(
         "Automatic browser launch requires a Linux systemd session. " +
           "Start your browser with --remote-debugging-port=9222."

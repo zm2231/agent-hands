@@ -1,5 +1,3 @@
-// CDP transport types.
-
 export interface CDPMessage {
   id?: number;
   method?: string;
@@ -12,7 +10,7 @@ export interface CDPMessage {
 export interface CDPTransport {
   send(msg: CDPMessage): void;
   onMessage(handler: (msg: CDPMessage) => void): void;
-  onClose(handler: () => void): void;
+  onClose(handler: (error?: Error) => void): void;
   close(): void;
 }
 
