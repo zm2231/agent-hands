@@ -27,6 +27,14 @@ async function removeInstalledTargets(dataHome: string): Promise<void> {
   await writeFile(path, `${JSON.stringify(record, null, 2)}\n`);
 }
 
+async function removeInstallRecord(dataHome: string): Promise<void> {
+  await rm(installRecordPath(dataHome));
+}
+
+async function corruptInstallRecord(dataHome: string): Promise<void> {
+  await writeFile(installRecordPath(dataHome), "not json\n");
+}
+
 async function fixture(): Promise<{
   root: string;
   hostPath: string;
@@ -245,6 +253,52 @@ describe("browser host installer", () => {
     expect(status.healthy).toBe(true);
     expect(status.lines.join("\n")).not.toContain("PROBLEM");
     expect(status.lines.join("\n")).toContain("predates manifest targets");
+  });
+
+  it("preserves and rebuilds shared state after a deleted record partial uninstall", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    await installBrowserHost({ ...base, browser: "chrome", extensionId });
+    await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
+    await removeInstallRecord(f.dataHome);
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).resolves.toBeUndefined();
+    await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
+    expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toEqual([
+      { browser: "brave", manifestPath: join(f.root, "brave", "com.zmerchant.agenthands.json") },
+    ]);
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    await expect(access(join(f.root, "launcher"))).rejects.toThrow();
+    await expect(readBrowserHostRecord({ dataHome: f.dataHome })).resolves.toBeNull();
+  });
+
+  it("preserves and rebuilds shared state after a corrupt record partial uninstall", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    await installBrowserHost({ ...base, browser: "chrome", extensionId });
+    await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
+    await corruptInstallRecord(f.dataHome);
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).resolves.toBeUndefined();
+    await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
+    expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toEqual([
+      { browser: "brave", manifestPath: join(f.root, "brave", "com.zmerchant.agenthands.json") },
+    ]);
+  });
+
+  it("writes one manifest and one record target for duplicate directories", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const sharedDirectory = join(f.root, "shared");
+    const duplicateDirectories: NativeMessagingHostDirectory[] = [
+      { browser: "chrome", directory: sharedDirectory },
+      { browser: "brave", directory: sharedDirectory },
+    ];
+    const lines = await installBrowserHost({ browser: "all", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: duplicateDirectories, dataHome: f.dataHome, writeLauncher: f.writeLauncher });
+    expect(lines.filter((line) => line.startsWith("WROTE "))).toHaveLength(1);
+    expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toHaveLength(1);
   });
 
   it("reports dead launcher dependencies and version drift", async () => {
