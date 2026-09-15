@@ -56,10 +56,6 @@ export type BrowserHostStatus = {
   healthy: boolean;
 };
 
-type LoadedBrowserHostRecord = BrowserHostRecord & {
-  hasInstalledTargets: boolean;
-};
-
 type LiveManifestTarget = {
   browser: NativeMessagingBrowser;
   directory: string;
@@ -222,18 +218,38 @@ async function launcherPathsForTargets(targets: Array<{ manifestPath: string }>)
   return [...paths];
 }
 
-function recordFromLiveTargets(record: LoadedBrowserHostRecord | null, targets: LiveManifestTarget[], launcherPath: string | undefined): BrowserHostRecord | null {
-  const path = record?.launcherPath ?? launcherPath;
-  if (!path) return null;
+async function launcherRuntime(launcherPath: string): Promise<{ nodePath: string; hostPath: string } | null> {
+  try {
+    const source = await readFile(launcherPath, "utf8");
+    const match = /^#!\/bin\/sh\nexec ('(?:[^']|'\\'')*') ('(?:[^']|'\\'')*') "\$@"\n$/.exec(source);
+    if (!match) return null;
+    return {
+      nodePath: match[1]!.slice(1, -1).replace(/'\\''/g, "'"),
+      hostPath: match[2]!.slice(1, -1).replace(/'\\''/g, "'"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function recordFromLiveTargets(targets: LiveManifestTarget[], launcherPath: string | undefined): Promise<BrowserHostRecord | null> {
+  if (!launcherPath) return null;
+  const runtime = await launcherRuntime(launcherPath);
   return {
-    version: record?.version ?? runningVersion(),
-    nodePath: record?.nodePath ?? process.execPath,
-    hostPath: record?.hostPath ?? defaultHostPath(),
-    launcherPath: path,
+    version: runningVersion(),
+    nodePath: runtime?.nodePath ?? process.execPath,
+    hostPath: runtime?.hostPath ?? defaultHostPath(),
+    launcherPath,
     extensionIds: targetExtensionIds(targets),
     installedTargets: recordTargets(targets),
     installedAt: new Date().toISOString(),
   };
+}
+
+async function writeBrowserHostRecord(dataHome: string, record: BrowserHostRecord): Promise<void> {
+  const path = recordPath(dataHome);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
 }
 
 async function defaultWriteLauncher(hostPath: string, nodePath: string): Promise<string> {
@@ -256,29 +272,26 @@ async function hostManifestModule(): Promise<{
   };
 }
 
-export async function readBrowserHostRecord(options: Pick<InstallerOptions, "os" | "home" | "dataHome"> = {}): Promise<LoadedBrowserHostRecord | null> {
+export async function readBrowserHostRecord(options: Pick<InstallerOptions, "os" | "home" | "dataHome"> = {}): Promise<BrowserHostRecord | null> {
   const os = options.os ?? platform();
   const home = options.home ?? homedir();
   const path = recordPath(options.dataHome ?? defaultDataHome(os, home));
   try {
     const record = JSON.parse(await readFile(path, "utf8")) as Partial<BrowserHostRecord>;
-    if (!record.version || !record.nodePath || !record.hostPath || !record.launcherPath) return null;
-    return {
-      version: record.version,
-      nodePath: record.nodePath,
-      hostPath: record.hostPath,
-      launcherPath: record.launcherPath,
-      extensionIds: Array.isArray(record.extensionIds) ? record.extensionIds.filter((id): id is string => typeof id === "string") : [],
-      installedTargets: Array.isArray(record.installedTargets)
-        ? record.installedTargets.filter((target): target is { browser: NativeMessagingBrowser; manifestPath: string } =>
-          typeof target === "object" && target !== null &&
-          ["chrome", "chromium", "edge", "brave"].includes((target as { browser?: string }).browser ?? "") &&
-          typeof (target as { manifestPath?: unknown }).manifestPath === "string",
-        )
-        : [],
-      installedAt: typeof record.installedAt === "string" ? record.installedAt : "",
-      hasInstalledTargets: Array.isArray(record.installedTargets),
-    };
+    if (
+      typeof record.version !== "string" ||
+      typeof record.nodePath !== "string" || !record.nodePath ||
+      typeof record.hostPath !== "string" || !record.hostPath ||
+      typeof record.launcherPath !== "string" || !record.launcherPath ||
+      !Array.isArray(record.extensionIds) || !record.extensionIds.every((id) => typeof id === "string") ||
+      !Array.isArray(record.installedTargets) || !record.installedTargets.every((target) =>
+        typeof target === "object" && target !== null &&
+        ["chrome", "chromium", "edge", "brave"].includes((target as { browser?: string }).browser ?? "") &&
+        typeof (target as { manifestPath?: unknown }).manifestPath === "string" && Boolean((target as { manifestPath: string }).manifestPath),
+      ) ||
+      typeof record.installedAt !== "string"
+    ) return null;
+    return record as BrowserHostRecord;
   } catch {
     return null;
   }
@@ -313,8 +326,7 @@ export async function installBrowserHost(options: InstallerOptions): Promise<str
     installedTargets: recordTargets(liveTargets),
     installedAt: new Date().toISOString(),
   };
-  await mkdir(dirname(recordPath(dataHome)), { recursive: true });
-  await writeFile(recordPath(dataHome), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeBrowserHostRecord(dataHome, record);
   return [...lines, "reload the extension and restart the browser"];
 }
 
@@ -335,8 +347,8 @@ export async function uninstallBrowserHost(options: InstallerOptions = {}): Prom
   const remainingTargets = await liveManifestTargets(options);
   if (remainingTargets.length > 0) {
     const remainingLauncherPath = (await launcherPathsForTargets(remainingTargets))[0];
-    const updatedRecord = recordFromLiveTargets(record, remainingTargets, remainingLauncherPath);
-    if (updatedRecord) await writeFile(recordPath(dataHome), `${JSON.stringify(updatedRecord, null, 2)}\n`, "utf8");
+    const updatedRecord = await recordFromLiveTargets(remainingTargets, remainingLauncherPath);
+    if (updatedRecord) await writeBrowserHostRecord(dataHome, updatedRecord);
   } else {
     const launcherPaths = new Set([record?.launcherPath, ...selectedLauncherPaths].filter((path): path is string => Boolean(path)));
     if (launcherPaths.size === 0) launcherPaths.add(await defaultLauncherPath());
@@ -352,7 +364,7 @@ export async function browserHostStatus(options: InstallerOptions = {}): Promise
   const record = await readBrowserHostRecord(options);
   const liveTargets = await liveManifestTargets(options);
   const livePaths = new Set(liveTargets.map(({ manifestPath }) => manifestPath));
-  const expectedTargets = record?.hasInstalledTargets ? record.installedTargets : [];
+  const expectedTargets = record?.installedTargets ?? [];
   const expectedPaths = new Set(expectedTargets.map(({ manifestPath }) => manifestPath));
   const targets = dedupeTargets([
     ...requestedDirectories({ ...options, browser: "all" }).map(({ browser, directory }) => ({ browser, manifestPath: manifestPathFor(directory) })),
@@ -369,9 +381,6 @@ export async function browserHostStatus(options: InstallerOptions = {}): Promise
     healthy = false;
     lines.push("PROBLEM install record missing. Run install-browser-host.");
     return { lines, healthy };
-  }
-  if (!record.hasInstalledTargets) {
-    lines.push("PASS install record predates manifest targets. Re-run install-browser-host to enable manifest drift detection.");
   }
   if (await exists(record.launcherPath)) lines.push(`PASS launcher: ${record.launcherPath}`);
   else {
