@@ -6,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import { createCDPClient } from "./client.js";
 import type { CDPClient, CDPMessage, CDPTransport } from "./types.js";
 
-const MAX_FRAME_BYTES = 1024 * 1024;
+const MAX_HOST_TO_EXTENSION_BYTES = 1024 * 1024;
+const MAX_EXTENSION_TO_HOST_BYTES = 64 * 1024 * 1024;
 const CONNECTION_TIMEOUT_MS = 60_000;
 
 type HostMessage = {
@@ -45,7 +46,7 @@ function socketPath(): string {
 
 function encode(message: HostMessage): Buffer {
   const body = Buffer.from(JSON.stringify(message));
-  if (body.length > MAX_FRAME_BYTES) throw new Error("Extension message exceeds the 1 MB native-messaging limit.");
+  if (body.length > MAX_HOST_TO_EXTENSION_BYTES) throw new Error("Extension message exceeds the 1 MB native-messaging limit.");
   const frame = Buffer.allocUnsafe(4 + body.length);
   frame.writeUInt32LE(body.length, 0);
   body.copy(frame, 4);
@@ -58,8 +59,8 @@ function attachFrames(socket: Socket, onMessage: (message: HostMessage) => boole
     buffered = Buffer.concat([buffered, typeof chunk === "string" ? Buffer.from(chunk) : chunk]);
     while (buffered.length >= 4) {
       const length = buffered.readUInt32LE(0);
-      if (length > MAX_FRAME_BYTES) {
-        socket.destroy(new Error("Extension message exceeds the 1 MB native-messaging limit."));
+      if (length > MAX_EXTENSION_TO_HOST_BYTES) {
+        socket.destroy(new Error("Extension message exceeds the 64 MB native-messaging limit."));
         return;
       }
       if (buffered.length < length + 4) return;

@@ -4,8 +4,8 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const MAX_EXTENSION_TO_HOST_BYTES = 1024 * 1024;
-const MAX_HOST_TO_EXTENSION_BYTES = 64 * 1024 * 1024;
+const MAX_EXTENSION_TO_HOST_BYTES = 64 * 1024 * 1024;
+const MAX_HOST_TO_EXTENSION_BYTES = 1024 * 1024;
 
 function frame(value, maxBytes) {
   const body = Buffer.from(JSON.stringify(value));

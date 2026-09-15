@@ -86,6 +86,38 @@ describe("native browser host", () => {
     await expect(response).resolves.toEqual({ id: 7, kind: "control", op: "listTabs", ok: true, result: { tabs: [] } });
   });
 
+  it("relays a native result larger than 1 MB", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const socketPath = join(directory, "host.sock");
+    const configDirectory = join(directory, "config", "agent-hands");
+    const token = "test-token";
+    let browserSocket: Socket | undefined;
+    const authenticated = new Promise<void>((resolve, reject) => {
+      const server = createServer((socket) => {
+        browserSocket = socket;
+        void receive(socket).then((message) => {
+          expect(message).toEqual({ kind: "auth", token });
+          resolve();
+        }, reject);
+      });
+      servers.add(server);
+      server.listen(socketPath);
+    });
+    await mkdir(configDirectory, { recursive: true });
+    await writeFile(join(configDirectory, "browser-host.json"), JSON.stringify({ socketPath, token }));
+
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, XDG_CONFIG_HOME: join(directory, "config") }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    await authenticated;
+    const data = "A".repeat(1024 * 1024 + 1);
+    const relayed = receive(browserSocket!);
+    host.stdin.write(frame({ id: 8, kind: "cdp", ok: true, result: { data } }));
+
+    await expect(relayed).resolves.toEqual({ id: 8, kind: "cdp", ok: true, result: { data } });
+    expect(host.exitCode).toBeNull();
+  });
+
   it("fails closed on an oversized native frame", async () => {
     const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
     directories.push(directory);
@@ -109,7 +141,7 @@ describe("native browser host", () => {
     processes.push(host);
     await connected;
     const oversized = Buffer.allocUnsafe(4);
-    oversized.writeUInt32LE(1024 * 1024 + 1, 0);
+    oversized.writeUInt32LE(64 * 1024 * 1024 + 1, 0);
     host.stdin.write(oversized);
 
     await expect(new Promise<number | null>((resolve) => host.once("exit", (code) => resolve(code)))).resolves.toBe(1);
