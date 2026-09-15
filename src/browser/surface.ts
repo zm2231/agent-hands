@@ -5,6 +5,7 @@ import { discoverEndpoint } from "./cdp/discovery.js";
 import { createCDPClient } from "./cdp/websocket.js";
 import { createExtensionConnection } from "./cdp/extension.js";
 import { hasNativeMessagingHostManifest } from "./cdp/manifest.js";
+import { warnIfBrowserHostVersionDrift } from "./host-installer.js";
 import type { CDPClient } from "./cdp/types.js";
 import { TabBridge } from "./tab-bridge.js";
 import { takeSnapshot } from "./snapshot.js";
@@ -91,6 +92,7 @@ async function ensureRoot(): Promise<CDPClient> {
   const selected = await selectRootConnection(process.env.AGENT_HANDS_BROWSER_TRANSPORT);
   rootCDP = selected.client;
   extensionConnection = selected.extensionConnection;
+  if (extensionConnection) await warnIfBrowserHostVersionDrift();
   rootCDP.on("close", () => {
     rootCDP = null;
     const connection = extensionConnection;

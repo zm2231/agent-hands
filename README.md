@@ -90,16 +90,17 @@ One tool (`browser`) with 17 actions: `start`, `tabs`, `open`, `find`, `click`, 
 
 ### Browser via extension (no debug port)
 
-By default the browser surface uses the unpacked MV3 extension when its native-host manifest is installed and reachable. Otherwise it connects to Chrome over the remote-debugging port. The extension path drives your real Chrome profile without a `--remote-debugging-port` launch flag and requires a source checkout (the `extension/` and `host/` directories):
+By default the browser surface uses the unpacked MV3 extension when its native-host manifest is installed and reachable. Otherwise it connects to Chrome over the remote-debugging port. The extension path drives your real Chrome profile without a `--remote-debugging-port` launch flag. Install agent-hands globally or use a source checkout. Running the host from `npx` is not supported because its cache path is not stable across updates.
 
 1. Load the extension: open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the `extension/` directory. Copy the resulting extension ID (stable across reloads because the manifest pins a `key`).
-2. Register the native host, allowlisting the extension ID (pass more IDs to allow several unpacked copies):
+2. Register the native host, allowlisting the extension ID:
    ```bash
-   node host/manifest.mjs "$(pwd)/host/native-host.mjs" <extension-id> [<extension-id>...] > \
-     ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.zmerchant.agenthands.json
+   agent-hands install-browser-host <extension-id>
    ```
-   This writes an executable launcher to `~/.config/agent-hands/native-host-launcher` that pins the absolute `node` of the installation you ran the command with, and points the manifest at that launcher so Chrome does not depend on `node` being on its own `PATH`. Re-run the command after switching Node versions. Shipping a self-contained packaged host binary is a planned follow-up; this launcher is the POSIX first pass.
+   The default target is Chrome. Use `--browser brave`, `--browser edge`, `--browser chromium`, or `--browser all` to write the matching native-host manifests. Re-running the command safely merges extension IDs. `agent-hands uninstall-browser-host` removes every matching manifest, the launcher, and the install record; pass `--browser ...` to remove one browser family. Use `agent-hands browser-host-status` to diagnose an installation.
 3. Start agent-hands, then reload the unpacked extension before calling `browser start`. Automatic selection probes the installed host for three seconds before falling back to TCP. Set `AGENT_HANDS_BROWSER_TRANSPORT=extension` to require the extension, or `AGENT_HANDS_BROWSER_TRANSPORT=tcp` to require remote-debugging TCP. The extension stops retrying after five unavailable-host attempts and releases its offscreen document.
+
+On a global install, run `npm update -g @zmerchant/agent-hands`; in a source checkout, run `git pull`. Neither update needs host reinstallation because the installed launcher points at the stable installation path. Re-run `agent-hands install-browser-host <extension-id>` after changing Node versions.
 
 The CLI writes its socket path and a per-run auth token to `~/.config/agent-hands/browser-host.json` (mode `0600`) automatically; you do not create that file. With this transport, `browser start` attaches to your live tabs; it does not launch Chrome.
 
