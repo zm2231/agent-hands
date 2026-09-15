@@ -42,6 +42,13 @@ async function updateInstallRecord(dataHome: string, update: (record: Record<str
   await writeFile(path, `${JSON.stringify(record, null, 2)}\n`);
 }
 
+async function updateManifest(directory: string, update: (manifest: Record<string, unknown>) => void): Promise<void> {
+  const path = join(directory, "com.zmerchant.agenthands.json");
+  const manifest = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  update(manifest);
+  await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 async function fixture(): Promise<{
   root: string;
   hostPath: string;
@@ -49,6 +56,7 @@ async function fixture(): Promise<{
   directories: NativeMessagingHostDirectory[];
   dataHome: string;
   writeLauncher(hostPath: string, nodePath: string): Promise<string>;
+  launcherPath(): string;
 }> {
   const root = await mkdtemp(join(tmpdir(), "agent-hands-installer-"));
   await mkdir(join(root, ".git"));
@@ -72,6 +80,9 @@ async function fixture(): Promise<{
       const launcher = join(root, "launcher");
       await writeFile(launcher, `${writtenNodePath}\n${writtenHostPath}\n`);
       return launcher;
+    },
+    launcherPath() {
+      return join(root, "launcher");
     },
   };
 }
@@ -97,7 +108,7 @@ describe("browser host installer", () => {
   it("writes manifests, merges origins, and remains idempotent", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const options = { browser: "all" as const, extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, version: "0.4.0" };
+    const options = { browser: "all" as const, extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath, version: "0.4.0" };
     const first = await installBrowserHost(options);
     expect(first.at(-1)).toBe("reload the extension and restart the browser");
     await installBrowserHost({ ...options, extensionId: secondExtensionId });
@@ -118,12 +129,12 @@ describe("browser host installer", () => {
     const npxHost = join(f.root, "_npx", "host", "native-host.mjs");
     await mkdir(join(f.root, "_npx", "host"), { recursive: true });
     await writeFile(npxHost, "export {};\n");
-    await expect(installBrowserHost({ extensionId, hostPath: npxHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).rejects.toThrow(STABLE_INSTALL_MESSAGE);
-    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).resolves.toBeTruthy();
+    await expect(installBrowserHost({ extensionId, hostPath: npxHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath })).rejects.toThrow(STABLE_INSTALL_MESSAGE);
+    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath })).resolves.toBeTruthy();
     const globalHost = join(f.root, "global", "agent-hands", "host", "native-host.mjs");
     await mkdir(join(f.root, "global", "agent-hands", "host"), { recursive: true });
     await writeFile(globalHost, "export {};\n");
-    await expect(installBrowserHost({ extensionId, hostPath: globalHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, npmRoot: async () => join(f.root, "global") })).resolves.toBeTruthy();
+    await expect(installBrowserHost({ extensionId, hostPath: globalHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath, npmRoot: async () => join(f.root, "global") })).resolves.toBeTruthy();
   });
 
   it("refuses a source-checkout symlink whose target is in an npx cache", async () => {
@@ -134,8 +145,8 @@ describe("browser host installer", () => {
     await mkdir(join(f.root, "_npx", "host"), { recursive: true });
     await writeFile(npxHost, "export {};\n");
     await symlink(npxHost, linkedHost);
-    await expect(installBrowserHost({ extensionId, hostPath: linkedHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).rejects.toThrow(STABLE_INSTALL_MESSAGE);
-    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).resolves.toBeTruthy();
+    await expect(installBrowserHost({ extensionId, hostPath: linkedHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath })).rejects.toThrow(STABLE_INSTALL_MESSAGE);
+    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath })).resolves.toBeTruthy();
   });
 
   it("accepts explicit and environment host-path overrides", async () => {
@@ -143,9 +154,9 @@ describe("browser host installer", () => {
     roots.push(f.root);
     process.env.AGENT_HANDS_HOST_PATH = f.hostPath;
     process.env.AGENT_HANDS_NATIVE_HOST_MANIFEST_DIRS = join(f.root, "override");
-    await expect(installBrowserHost({ extensionId, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).resolves.toBeTruthy();
+    await expect(installBrowserHost({ extensionId, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath })).resolves.toBeTruthy();
     await expect(access(join(f.root, "override", "com.zmerchant.agenthands.json"))).resolves.toBeUndefined();
-    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).resolves.toBeTruthy();
+    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath })).resolves.toBeTruthy();
   });
 
   it("does not create a launcher when there are no supported target directories", async () => {
@@ -169,9 +180,9 @@ describe("browser host installer", () => {
   it("uninstalls manifests, launcher, and the install record", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const options = { browser: "all" as const, extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const options = { browser: "all" as const, extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost(options);
-    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     for (const { directory } of f.directories) await expect(access(join(directory, "com.zmerchant.agenthands.json"))).rejects.toThrow();
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(access(join(f.dataHome, "agent-hands", "browser-host-install.json"))).rejects.toThrow();
@@ -180,7 +191,7 @@ describe("browser host installer", () => {
   it("accumulates extension IDs and targets across separate browser installs", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     const record = await readBrowserHostRecord({ dataHome: f.dataHome });
@@ -194,9 +205,9 @@ describe("browser host installer", () => {
   it("reports a deleted installed manifest while ignoring a browser never installed", async () => {
     const f = await fixture();
     roots.push(f.root);
-    await installBrowserHost({ browser: "chrome", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher });
+    await installBrowserHost({ browser: "chrome", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath });
     await rm(join(f.root, "chrome", "com.zmerchant.agenthands.json"));
-    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     expect(status.healthy).toBe(false);
     expect(status.lines.join("\n")).toContain("PROBLEM chrome: manifest missing");
     expect(status.lines.join("\n")).toContain("PASS brave: manifest not installed");
@@ -205,17 +216,17 @@ describe("browser host installer", () => {
   it("preserves the shared launcher and record until the final browser uninstall", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     const remaining = await readBrowserHostRecord({ dataHome: f.dataHome });
     const braveManifest = JSON.parse(await readFile(join(f.root, "brave", "com.zmerchant.agenthands.json"), "utf8"));
     await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
     expect(braveManifest.path).toBe(remaining?.launcherPath);
     expect(remaining?.extensionIds).toEqual([secondExtensionId]);
     expect(remaining?.installedTargets).toEqual([{ browser: "brave", manifestPath: join(f.root, "brave", "com.zmerchant.agenthands.json") }]);
-    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).rejects.toThrow();
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(readBrowserHostRecord({ dataHome: f.dataHome })).resolves.toBeNull();
@@ -224,11 +235,11 @@ describe("browser host installer", () => {
   it("uses live manifests when uninstalling from a legacy record", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     await removeInstalledTargets(f.dataHome);
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     const remaining = await readBrowserHostRecord({ dataHome: f.dataHome });
     await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).resolves.toBeUndefined();
     await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
@@ -239,14 +250,14 @@ describe("browser host installer", () => {
   it("drops a manifest deleted outside the installer before recording a later install", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     await rm(join(f.root, "brave", "com.zmerchant.agenthands.json"));
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     const record = await readBrowserHostRecord({ dataHome: f.dataHome });
     expect(record?.installedTargets).toEqual([{ browser: "chrome", manifestPath: join(f.root, "chrome", "com.zmerchant.agenthands.json") }]);
     expect(record?.extensionIds).toEqual([extensionId]);
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(readBrowserHostRecord({ dataHome: f.dataHome })).resolves.toBeNull();
   });
@@ -254,9 +265,9 @@ describe("browser host installer", () => {
   it("reports a legacy record as invalid while preserving its live manifest", async () => {
     const f = await fixture();
     roots.push(f.root);
-    await installBrowserHost({ browser: "chrome", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher });
+    await installBrowserHost({ browser: "chrome", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath });
     await removeInstalledTargets(f.dataHome);
-    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     expect(status.healthy).toBe(false);
     expect(status.lines.join("\n")).toContain("PASS chrome: manifest present");
     expect(status.lines.join("\n")).toContain("PROBLEM install record missing");
@@ -265,17 +276,17 @@ describe("browser host installer", () => {
   it("preserves and rebuilds shared state after a deleted record partial uninstall", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     await removeInstallRecord(f.dataHome);
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).resolves.toBeUndefined();
     await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
     expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toEqual([
       { browser: "brave", manifestPath: join(f.root, "brave", "com.zmerchant.agenthands.json") },
     ]);
-    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(readBrowserHostRecord({ dataHome: f.dataHome })).resolves.toBeNull();
   });
@@ -283,11 +294,11 @@ describe("browser host installer", () => {
   it("preserves and rebuilds shared state after a corrupt record partial uninstall", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     await corruptInstallRecord(f.dataHome);
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).resolves.toBeUndefined();
     await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
     expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toEqual([
@@ -303,7 +314,7 @@ describe("browser host installer", () => {
       { browser: "chrome", directory: sharedDirectory },
       { browser: "brave", directory: sharedDirectory },
     ];
-    const lines = await installBrowserHost({ browser: "all", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: duplicateDirectories, dataHome: f.dataHome, writeLauncher: f.writeLauncher });
+    const lines = await installBrowserHost({ browser: "all", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: duplicateDirectories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath });
     expect(lines.filter((line) => line.startsWith("WROTE "))).toHaveLength(1);
     expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toHaveLength(1);
   });
@@ -311,9 +322,9 @@ describe("browser host installer", () => {
   it("removes the real launcher after an all-browser uninstall with a schema-corrupt record", async () => {
     const f = await fixture();
     roots.push(f.root);
-    await installBrowserHost({ browser: "all", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher });
+    await installBrowserHost({ browser: "all", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath });
     await updateInstallRecord(f.dataHome, (record) => { record.launcherPath = {}; });
-    await expect(uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome })).resolves.toBeTruthy();
+    await expect(uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath })).resolves.toBeTruthy();
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(readBrowserHostRecord({ dataHome: f.dataHome })).resolves.toBeNull();
   });
@@ -321,24 +332,53 @@ describe("browser host installer", () => {
   it("rebuilds a stale readable record from the remaining live manifest", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     await updateInstallRecord(f.dataHome, (record) => { record.launcherPath = join(f.root, "missing-launcher"); });
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     const record = await readBrowserHostRecord({ dataHome: f.dataHome });
     expect(record?.launcherPath).toBe(join(f.root, "launcher"));
-    expect((await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome })).healthy).toBe(true);
+    expect((await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath })).healthy).toBe(true);
+  });
+
+  it("only removes the deterministic launcher when stale paths are poisoned", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
+    const sentinel = join(f.root, "sentinel");
+    await installBrowserHost({ ...base, browser: "chrome", extensionId });
+    await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
+    await writeFile(sentinel, "keep\n");
+    await updateInstallRecord(f.dataHome, (record) => { record.launcherPath = sentinel; });
+    await updateManifest(join(f.root, "brave"), (manifest) => { manifest.path = {}; });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
+    await expect(access(sentinel)).resolves.toBeUndefined();
+    await expect(access(f.launcherPath())).resolves.toBeUndefined();
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
+    await expect(access(sentinel)).resolves.toBeUndefined();
+    await expect(access(f.launcherPath())).rejects.toThrow();
+  });
+
+  it("checks the deterministic launcher path in browser host status", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const options = { browser: "chrome" as const, extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
+    await installBrowserHost(options);
+    await updateInstallRecord(f.dataHome, (record) => { record.launcherPath = join(f.root, "bogus-launcher"); });
+    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
+    expect(status.healthy).toBe(true);
+    expect(status.lines).toContain(`PASS launcher: ${f.launcherPath()}`);
   });
 
   it("recreates the record directory while reconciling a partial uninstall", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath };
     await installBrowserHost({ ...base, browser: "chrome", extensionId });
     await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
     await rm(join(f.dataHome, "agent-hands"), { recursive: true, force: true });
-    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath });
     expect((await readBrowserHostRecord({ dataHome: f.dataHome }))?.installedTargets).toEqual([
       { browser: "brave", manifestPath: join(f.root, "brave", "com.zmerchant.agenthands.json") },
     ]);
@@ -347,11 +387,11 @@ describe("browser host installer", () => {
   it("reports dead launcher dependencies and version drift", async () => {
     const f = await fixture();
     roots.push(f.root);
-    const options = { extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, version: "0.3.0" };
+    const options = { extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, launcherPath: f.launcherPath, version: "0.3.0" };
     await installBrowserHost(options);
     await rm(f.hostPath);
     await rm(f.nodePath);
-    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome, version: "0.4.0" });
+    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome, launcherPath: f.launcherPath, version: "0.4.0" });
     expect(status.healthy).toBe(false);
     expect(status.lines.join("\n")).toContain("node missing");
     expect(status.lines.join("\n")).toContain("host missing");
