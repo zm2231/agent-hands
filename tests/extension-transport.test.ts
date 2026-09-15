@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { connect, type Socket } from "node:net";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createExtensionConnection } from "../src/browser/cdp/extension.js";
@@ -91,6 +91,19 @@ describe("extension transport (real createExtensionConnection)", () => {
     expect(control).toMatchObject({ kind: "control", op: "createTarget", url: "https://example.com" });
     expect(control).not.toHaveProperty("method");
     expect(result).toEqual({ targetId: 42 });
+  });
+
+  it("removes the socket and config after a timed out connection", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-hands-ext-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    process.env.XDG_CONFIG_HOME = dir;
+
+    const connection = createExtensionConnection(20);
+    const config = await readConfig(dir);
+
+    await expect(connection).rejects.toThrow("Timed out waiting");
+    await expect(access(config.socketPath)).rejects.toThrow();
+    await expect(readFile(join(dir, "agent-hands", "browser-host.json"), "utf8")).rejects.toThrow();
   });
 
   it("drops an unauthenticated host and keeps the authenticated controller working", async () => {

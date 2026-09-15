@@ -4,6 +4,7 @@ import type { SurfaceDescriptor, ToolDefinition, ToolResult, CallContext, Surfac
 import { discoverEndpoint } from "./cdp/discovery.js";
 import { createCDPClient } from "./cdp/websocket.js";
 import { createExtensionConnection } from "./cdp/extension.js";
+import { hasNativeMessagingHostManifest } from "./cdp/manifest.js";
 import type { CDPClient } from "./cdp/types.js";
 import { TabBridge } from "./tab-bridge.js";
 import { takeSnapshot } from "./snapshot.js";
@@ -49,15 +50,47 @@ let rootCDP: CDPClient | null = null;
 let extensionConnection: Awaited<ReturnType<typeof createExtensionConnection>> | null = null;
 const bridges = new Map<string, TabBridge>(); // targetId -> TabBridge
 
+const AUTO_EXTENSION_TIMEOUT_MS = 3_000;
+
+type RootConnection = { client: CDPClient; extensionConnection: Awaited<ReturnType<typeof createExtensionConnection>> | null };
+type RootConnectionDeps = {
+  hasManifest(): Promise<boolean>;
+  connectExtension(timeoutMs: number): ReturnType<typeof createExtensionConnection>;
+  connectTcp(): Promise<CDPClient>;
+};
+
+const defaultRootConnectionDeps: RootConnectionDeps = {
+  hasManifest: hasNativeMessagingHostManifest,
+  connectExtension: createExtensionConnection,
+  async connectTcp() {
+    return createCDPClient(await discoverEndpoint());
+  },
+};
+
+export async function selectRootConnection(
+  mode: string | undefined,
+  deps: RootConnectionDeps = defaultRootConnectionDeps,
+): Promise<RootConnection> {
+  if (mode === "tcp") return { client: await deps.connectTcp(), extensionConnection: null };
+  if (mode === "extension") {
+    const connection = await deps.connectExtension(60_000);
+    return { client: connection.client, extensionConnection: connection };
+  }
+  if (mode !== undefined) throw new Error("AGENT_HANDS_BROWSER_TRANSPORT must be tcp or extension.");
+  if (!await deps.hasManifest()) return { client: await deps.connectTcp(), extensionConnection: null };
+  try {
+    const connection = await deps.connectExtension(AUTO_EXTENSION_TIMEOUT_MS);
+    return { client: connection.client, extensionConnection: connection };
+  } catch {
+    return { client: await deps.connectTcp(), extensionConnection: null };
+  }
+}
+
 async function ensureRoot(): Promise<CDPClient> {
   if (rootCDP) return rootCDP;
-  if (process.env.AGENT_HANDS_BROWSER_TRANSPORT === "extension") {
-    extensionConnection = await createExtensionConnection();
-    rootCDP = extensionConnection.client;
-  } else {
-    const wsUrl = await discoverEndpoint();
-    rootCDP = await createCDPClient(wsUrl);
-  }
+  const selected = await selectRootConnection(process.env.AGENT_HANDS_BROWSER_TRANSPORT);
+  rootCDP = selected.client;
+  extensionConnection = selected.extensionConnection;
   rootCDP.on("close", () => {
     rootCDP = null;
     const connection = extensionConnection;

@@ -4,7 +4,7 @@ let nativeTimer;
 let nativeAttempts = 0;
 
 const NATIVE_BACKOFF_MIN_MS = 1000;
-const NATIVE_BACKOFF_MAX_MS = 30000;
+const NATIVE_BACKOFF_MAX_MS = 4000;
 const MAX_NATIVE_ATTEMPTS = 5;
 let nativeBackoff = NATIVE_BACKOFF_MIN_MS;
 

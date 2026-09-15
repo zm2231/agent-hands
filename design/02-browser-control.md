@@ -122,7 +122,7 @@ Every action result carries `ref_id`. Simple mutating actions return `{ ref_id, 
 
 ### 7.4 screenshot
 
-`Page.captureScreenshot { format: "jpeg", quality: 80, clip?, captureBeyondViewport: false }`; decode the base64 `data`, write the JPEG to the artifact path (section 8); read `window.devicePixelRatio` (default 1 on failure). Returns `{ ref_id, id?, selector?, file, dpr, coordinates: "CSS pixels; screenshot pixels / DPR" }`.
+`Page.captureScreenshot { format: "jpeg", quality: 80, clip?, captureBeyondViewport: false }`; decode the base64 `data`, write the JPEG to the artifact path (section 8); read `window.devicePixelRatio` (default 1 on failure). Returns `{ ref_id, id?, selector?, file, dpr, coordinates: "CSS pixels; screenshot pixels / DPR" }`. Transport selection is automatic: use the extension when its installed native host connects during a short probe, otherwise use TCP CDP. Set `AGENT_HANDS_BROWSER_TRANSPORT=extension` or `tcp` to force either transport.
 
 - viewport: no clip.
 - by `selector`: querySelector, `scrollIntoView`, `getBoundingClientRect` plus 10 px padding clamped to the window, as the clip.

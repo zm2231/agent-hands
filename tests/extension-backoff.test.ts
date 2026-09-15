@@ -148,7 +148,7 @@ describe("extension native reconnect backoff (real background.js)", () => {
       }
     }
 
-    expect(observedDelays).toEqual([1000, 2000, 4000, 8000]);
+    expect(observedDelays).toEqual([1000, 2000, 4000, 4000]);
     expect(h.offscreenClosed()).toBe(1);
     expect(h.timers.length).toBe(0);
   });

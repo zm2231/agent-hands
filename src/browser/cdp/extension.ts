@@ -1,5 +1,5 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -8,7 +8,7 @@ import type { CDPClient, CDPMessage, CDPTransport } from "./types.js";
 
 const MAX_HOST_TO_EXTENSION_BYTES = 1024 * 1024;
 const MAX_EXTENSION_TO_HOST_BYTES = 64 * 1024 * 1024;
-const CONNECTION_TIMEOUT_MS = 60_000;
+export const CONNECTION_TIMEOUT_MS = 60_000;
 
 type HostMessage = {
   id?: number;
@@ -178,7 +178,14 @@ class ExtensionTransport implements CDPTransport {
   }
 }
 
-export async function createExtensionConnection(): Promise<ExtensionConnection> {
+async function removeConfig(path: string, socketPath: string, token: string): Promise<void> {
+  try {
+    const current = JSON.parse(await readFile(path, "utf8")) as { socketPath?: string; token?: string };
+    if (current.socketPath === socketPath && current.token === token) await rm(path, { force: true });
+  } catch {}
+}
+
+export async function createExtensionConnection(timeoutMs = CONNECTION_TIMEOUT_MS): Promise<ExtensionConnection> {
   const path = socketPath();
   const token = randomBytes(32).toString("hex");
   const config = configPath();
@@ -188,9 +195,10 @@ export async function createExtensionConnection(): Promise<ExtensionConnection> 
 
   let server: Server | undefined;
   let socket: Socket | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     socket = await new Promise<Socket>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timed out waiting for the agent-hands Chrome extension. Load extension/ unpacked and register host/native-host.mjs as com.zmerchant.agenthands.`)), CONNECTION_TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error(`Timed out waiting for the agent-hands Chrome extension. Load extension/ unpacked and register host/native-host.mjs as com.zmerchant.agenthands.`)), timeoutMs);
       server = createServer((candidate) => {
         if (socket) {
           candidate.destroy();
@@ -217,12 +225,15 @@ export async function createExtensionConnection(): Promise<ExtensionConnection> 
         transport.close();
         await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
         await rm(path, { force: true });
+        await removeConfig(config, path, token);
       },
     };
   } catch (error) {
+    if (timer) clearTimeout(timer);
     socket?.destroy();
     await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
     await rm(path, { force: true });
+    await removeConfig(config, path, token);
     throw error;
   }
 }
