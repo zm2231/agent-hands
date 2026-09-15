@@ -9,7 +9,7 @@ Expose control of the user's real, logged-in Chrome-family browser to any MCP cl
 ## 2. Runtime shape
 
 - A single Node process, stdio MCP server, model-agnostic. Node 22+.
-- Portable across macOS, Linux, Windows (discovery covers all three). Validate on the primary machine first.
+- TCP discovery supports macOS, Linux, and Windows. Extension auto-selection supports macOS and Linux; Windows registry-based native-host discovery is a later phase. Validate on the primary machine first.
 - Requires a Chrome-family browser reachable over CDP (remote debugging enabled), or launchable via the `start` action.
 
 ## 3. Tool surface
@@ -76,7 +76,7 @@ A browser the module attached to is never closed by the module.
 
 Two transports carry CDP: TCP CDP (the WebSocket debugger URL resolved above) and an extension transport (an unpacked MV3 extension plus a native-messaging host, bridged to the module over a per-run Unix socket authenticated by a token). `AGENT_HANDS_BROWSER_TRANSPORT` selects between them:
 
-- unset (auto): use the extension only when its native-host manifest is installed and the extension connects within a 3 s probe; otherwise fall back to TCP with no delay. Manifest lookup scans the per-OS `NativeMessagingHosts` directories, overridable via `AGENT_HANDS_NATIVE_HOST_MANIFEST_DIRS` (path-separator list).
+- unset (auto): use the extension only when its native-host manifest is installed and the extension connects within a 3 s probe; otherwise fall back to TCP with no delay. Manifest lookup supports macOS and Linux `NativeMessagingHosts` directories, overridable via `AGENT_HANDS_NATIVE_HOST_MANIFEST_DIRS` (path-separator list). Windows is TCP-only until registry-based native-host discovery is implemented.
 - `tcp`: require TCP CDP (the debug port).
 - `extension`: require the extension, waiting the full connection timeout with no TCP fallback.
 

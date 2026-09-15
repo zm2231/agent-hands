@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { selectRootConnection } from "../src/browser/surface.js";
 import type { CDPClient } from "../src/browser/cdp/types.js";
 
@@ -45,6 +45,24 @@ describe("browser transport selection", () => {
     expect(selected.client).toBe(extensionClient);
     expect(timeout).toBe(3000);
     expect(d.tcpCalls()).toBe(0);
+  });
+
+  it("selects the extension after a pending maximum-backoff reconnect", async () => {
+    vi.useFakeTimers();
+    const d = deps(true, (timeout) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve({ client: extensionClient, close: async () => {} }), 2000);
+      setTimeout(() => {
+        clearTimeout(timer);
+        reject(new Error("auto probe expired"));
+      }, timeout);
+    }));
+
+    const selected = selectRootConnection(undefined, d);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    await expect(selected).resolves.toMatchObject({ client: extensionClient });
+    expect(d.tcpCalls()).toBe(0);
+    vi.useRealTimers();
   });
 
   it("falls back to TCP after an auto extension probe fails", async () => {
