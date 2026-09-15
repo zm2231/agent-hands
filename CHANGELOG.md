@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.4.0...agent-hands-v0.4.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* add browser host installer CLI ([#16](https://github.com/zm2231/agent-hands/issues/16)) ([49950d2](https://github.com/zm2231/agent-hands/commit/49950d2a6301156c50df46ab91d2c627c512ba8f))
+
 ## [0.4.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.3.3...agent-hands-v0.4.0) (2026-09-15)
 
 
