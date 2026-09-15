@@ -72,6 +72,14 @@ Resolve a CDP WebSocket debugger URL in this order:
 
 A browser the module attached to is never closed by the module.
 
+### 4.1 Transport selection
+
+Two transports carry CDP: TCP CDP (the WebSocket debugger URL resolved above) and an extension transport (an unpacked MV3 extension plus a native-messaging host, bridged to the module over a per-run Unix socket authenticated by a token). `AGENT_HANDS_BROWSER_TRANSPORT` selects between them:
+
+- unset (auto): use the extension only when its native-host manifest is installed and the extension connects within a 3 s probe; otherwise fall back to TCP with no delay. Manifest lookup scans the per-OS `NativeMessagingHosts` directories, overridable via `AGENT_HANDS_NATIVE_HOST_MANIFEST_DIRS` (path-separator list).
+- `tcp`: require TCP CDP (the debug port).
+- `extension`: require the extension, waiting the full connection timeout with no TCP fallback.
+
 Timeouts: `CDP_TIMEOUT_MS = 15000`, `NAVIGATION_TIMEOUT_MS = 30000`.
 
 ## 5. Session model
@@ -122,7 +130,7 @@ Every action result carries `ref_id`. Simple mutating actions return `{ ref_id, 
 
 ### 7.4 screenshot
 
-`Page.captureScreenshot { format: "jpeg", quality: 80, clip?, captureBeyondViewport: false }`; decode the base64 `data`, write the JPEG to the artifact path (section 8); read `window.devicePixelRatio` (default 1 on failure). Returns `{ ref_id, id?, selector?, file, dpr, coordinates: "CSS pixels; screenshot pixels / DPR" }`. Transport selection is automatic: use the extension when its installed native host connects during a short probe, otherwise use TCP CDP. Set `AGENT_HANDS_BROWSER_TRANSPORT=extension` or `tcp` to force either transport.
+`Page.captureScreenshot { format: "jpeg", quality: 80, clip?, captureBeyondViewport: false }`; decode the base64 `data`, write the JPEG to the artifact path (section 8); read `window.devicePixelRatio` (default 1 on failure). Returns `{ ref_id, id?, selector?, file, dpr, coordinates: "CSS pixels; screenshot pixels / DPR" }`.
 
 - viewport: no clip.
 - by `selector`: querySelector, `scrollIntoView`, `getBoundingClientRect` plus 10 px padding clamped to the window, as the clip.
