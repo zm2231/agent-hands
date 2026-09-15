@@ -55,11 +55,13 @@ Then point the config at the local build (`"command": "node", "args": ["/path/to
   1. Install [ChatGPT for Mac](https://openai.com/chatgpt/mac/) at `/Applications/ChatGPT.app`
   2. Open ChatGPT > Settings > enable **Computer Use**
   3. Grant **Screen Recording** and **Accessibility** permissions (System Settings > Privacy & Security)
-- For browser control: Chrome with remote debugging enabled. Launch with:
-  ```
-  /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-  ```
-  agent-hands auto-detects the debug port from Chrome's `DevToolsActivePort` file if present.
+- For browser control, one of two transports:
+  - **Extension (recommended, reaches your real logged-in profile).** Load the unpacked MV3 extension and register its native host once, then agent-hands drives your actual Chrome with your cookies, logins, and tabs. No launch flag, no separate profile. See [Browser via extension](#browser-via-extension-no-debug-port) for the one-time setup.
+  - **Remote-debugging port (fallback).** If no extension host is installed, agent-hands connects over Chrome's DevTools port. Launch Chrome with:
+    ```
+    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+    ```
+    It auto-detects the port from Chrome's `DevToolsActivePort` file if present. On Chrome 136+ this attaches to a dedicated debug profile, not your default one.
 
 No ChatGPT subscription required at runtime. agent-hands uses the signed Codex Computer Use binary directly.
 
@@ -131,7 +133,7 @@ Or in your MCP config:
 
 The desktop surface dispatches to OpenAI's signed `codex app-server` binary (the same one Codex uses) through a retained session. The agent never runs its own model; it just executes what your agent asks for. Sessions stay alive across calls so Computer Use activation persists between reading the screen and acting on it. 30 seconds of idle closes the session automatically; if it dies, the next call creates a fresh one.
 
-The browser surface connects to Chrome's DevTools Protocol over the debugging port. Standard CDP, nothing exotic.
+The browser surface speaks the Chrome DevTools Protocol over one of two transports, chosen automatically. When the extension's native-host manifest is installed and reachable, it drives your real logged-in Chrome through an unpacked MV3 extension and a native-messaging host, bridged to the server over an authenticated per-run socket; commands run via `chrome.debugger`, so there is no separate debug profile and no `--remote-debugging-port` flag. Without the extension it falls back to CDP over Chrome's remote-debugging port. `AGENT_HANDS_BROWSER_TRANSPORT` forces either path.
 
 ## License
 
