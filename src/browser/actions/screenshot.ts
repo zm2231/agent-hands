@@ -81,7 +81,8 @@ export async function screenshotAction(
   }
 
   const captureParams: Record<string, unknown> = {
-    format: "png",
+    format: "jpeg",
+    quality: 80,
     captureBeyondViewport: false,
   };
   if (clip) captureParams.clip = clip;

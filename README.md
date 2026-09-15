@@ -86,6 +86,23 @@ All mutation tools accept `observe: true` to get a fresh screenshot and accessib
 
 One tool (`browser`) with 17 actions: `start`, `tabs`, `open`, `find`, `click`, `type`, `screenshot`, `html`, `navigate`, `evaluate`, `network`, `load_all`, `raw`, `read_result`, `discard_result`, `stop`. Call `help` for the full reference.
 
+### Browser via extension (no debug port)
+
+By default the browser surface uses the unpacked MV3 extension when its native-host manifest is installed and reachable. Otherwise it connects to Chrome over the remote-debugging port. The extension path drives your real Chrome profile without a `--remote-debugging-port` launch flag and requires a source checkout (the `extension/` and `host/` directories):
+
+1. Load the extension: open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the `extension/` directory. Copy the resulting extension ID (stable across reloads because the manifest pins a `key`).
+2. Register the native host, allowlisting the extension ID (pass more IDs to allow several unpacked copies):
+   ```bash
+   node host/manifest.mjs "$(pwd)/host/native-host.mjs" <extension-id> [<extension-id>...] > \
+     ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.zmerchant.agenthands.json
+   ```
+   This writes an executable launcher to `~/.config/agent-hands/native-host-launcher` that pins the absolute `node` of the installation you ran the command with, and points the manifest at that launcher so Chrome does not depend on `node` being on its own `PATH`. Re-run the command after switching Node versions. Shipping a self-contained packaged host binary is a planned follow-up; this launcher is the POSIX first pass.
+3. Start agent-hands, then reload the unpacked extension before calling `browser start`. Automatic selection probes the installed host for three seconds before falling back to TCP. Set `AGENT_HANDS_BROWSER_TRANSPORT=extension` to require the extension, or `AGENT_HANDS_BROWSER_TRANSPORT=tcp` to require remote-debugging TCP. The extension stops retrying after five unavailable-host attempts and releases its offscreen document.
+
+The CLI writes its socket path and a per-run auth token to `~/.config/agent-hands/browser-host.json` (mode `0600`) automatically; you do not create that file. With this transport, `browser start` attaches to your live tabs; it does not launch Chrome.
+
+The native host reads one active controller configuration, so run one extension-transport agent-hands server at a time.
+
 ## Configuration
 
 Only enable the surface you need:
@@ -106,6 +123,7 @@ Or in your MCP config:
 | Variable | Default | What it does |
 |---|---|---|
 | `AGENT_HANDS_SURFACES` | `desktop,browser` | Which surfaces to enable |
+| `AGENT_HANDS_BROWSER_TRANSPORT` | auto | Browser transport: auto-detect extension then TCP, `tcp` (debug port), or `extension` (required unpacked MV3 extension + native host) |
 | `CDP_HOST` | `127.0.0.1` | Chrome debug host |
 | `CDP_PORT` | `9222` | Chrome debug port |
 
