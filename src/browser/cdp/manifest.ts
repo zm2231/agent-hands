@@ -4,32 +4,47 @@ import { delimiter, join } from "node:path";
 
 const HOST_NAME = "com.zmerchant.agenthands.json";
 
+export type NativeMessagingBrowser = "chrome" | "chromium" | "edge" | "brave";
+
+export type NativeMessagingHostDirectory = {
+  browser: NativeMessagingBrowser;
+  directory: string;
+};
+
+export function nativeMessagingHostDirectoryEntriesFor(
+  os: string,
+  home: string,
+  configHome: string,
+): NativeMessagingHostDirectory[] {
+  if (os === "darwin") {
+    const support = join(home, "Library", "Application Support");
+    return [
+      { browser: "chrome", directory: join(support, "Google", "Chrome", "NativeMessagingHosts") },
+      { browser: "chrome", directory: join(support, "Google", "Chrome Beta", "NativeMessagingHosts") },
+      { browser: "chrome", directory: join(support, "Google", "Chrome Canary", "NativeMessagingHosts") },
+      { browser: "chromium", directory: join(support, "Chromium", "NativeMessagingHosts") },
+      { browser: "edge", directory: join(support, "Microsoft Edge", "NativeMessagingHosts") },
+      { browser: "brave", directory: join(support, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts") },
+    ];
+  }
+  if (os === "linux") {
+    return [
+      { browser: "chrome", directory: join(configHome, "google-chrome", "NativeMessagingHosts") },
+      { browser: "chrome", directory: join(configHome, "google-chrome-beta", "NativeMessagingHosts") },
+      { browser: "chromium", directory: join(configHome, "chromium", "NativeMessagingHosts") },
+      { browser: "edge", directory: join(configHome, "microsoft-edge", "NativeMessagingHosts") },
+      { browser: "brave", directory: join(configHome, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts") },
+    ];
+  }
+  return [];
+}
+
 export function nativeMessagingHostDirectoriesFor(
   os: string,
   home: string,
   configHome: string,
 ): string[] {
-  if (os === "darwin") {
-    const support = join(home, "Library", "Application Support");
-    return [
-      join(support, "Google", "Chrome", "NativeMessagingHosts"),
-      join(support, "Google", "Chrome Beta", "NativeMessagingHosts"),
-      join(support, "Google", "Chrome Canary", "NativeMessagingHosts"),
-      join(support, "Chromium", "NativeMessagingHosts"),
-      join(support, "Microsoft Edge", "NativeMessagingHosts"),
-      join(support, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts"),
-    ];
-  }
-  if (os === "linux") {
-    return [
-      join(configHome, "google-chrome", "NativeMessagingHosts"),
-      join(configHome, "google-chrome-beta", "NativeMessagingHosts"),
-      join(configHome, "chromium", "NativeMessagingHosts"),
-      join(configHome, "microsoft-edge", "NativeMessagingHosts"),
-      join(configHome, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts"),
-    ];
-  }
-  return [];
+  return nativeMessagingHostDirectoryEntriesFor(os, home, configHome).map(({ directory }) => directory);
 }
 
 export function nativeMessagingHostDirectories(): string[] {
