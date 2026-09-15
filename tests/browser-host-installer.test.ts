@@ -109,12 +109,30 @@ describe("browser host installer", () => {
     await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).resolves.toBeTruthy();
   });
 
+  it("does not create a launcher when there are no supported target directories", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    let launcherCalls = 0;
+    await expect(installBrowserHost({
+      extensionId,
+      hostPath: f.hostPath,
+      os: "unsupported",
+      home: f.root,
+      dataHome: f.dataHome,
+      writeLauncher: async () => {
+        launcherCalls += 1;
+        return join(f.root, "launcher");
+      },
+    })).rejects.toThrow("No supported browser native-host directories");
+    expect(launcherCalls).toBe(0);
+  });
+
   it("uninstalls manifests, launcher, and the install record", async () => {
     const f = await fixture();
     roots.push(f.root);
     const options = { browser: "all" as const, extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
     await installBrowserHost(options);
-    await uninstallBrowserHost({ browser: "all", manifestDirectories: f.directories, dataHome: f.dataHome });
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome });
     for (const { directory } of f.directories) await expect(access(join(directory, "com.zmerchant.agenthands.json"))).rejects.toThrow();
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(access(join(f.dataHome, "agent-hands", "browser-host-install.json"))).rejects.toThrow();

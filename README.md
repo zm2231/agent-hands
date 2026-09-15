@@ -97,7 +97,7 @@ By default the browser surface uses the unpacked MV3 extension when its native-h
    ```bash
    agent-hands install-browser-host <extension-id>
    ```
-   The default target is Chrome. Use `--browser brave`, `--browser edge`, `--browser chromium`, or `--browser all` to write the matching native-host manifests. Re-running the command safely merges extension IDs. Use `agent-hands uninstall-browser-host [--browser ...]` to remove the manifest, launcher, and install record. Use `agent-hands browser-host-status` to diagnose an installation.
+   The default target is Chrome. Use `--browser brave`, `--browser edge`, `--browser chromium`, or `--browser all` to write the matching native-host manifests. Re-running the command safely merges extension IDs. `agent-hands uninstall-browser-host` removes every matching manifest, the launcher, and the install record; pass `--browser ...` to remove one browser family. Use `agent-hands browser-host-status` to diagnose an installation.
 3. Start agent-hands, then reload the unpacked extension before calling `browser start`. Automatic selection probes the installed host for three seconds before falling back to TCP. Set `AGENT_HANDS_BROWSER_TRANSPORT=extension` to require the extension, or `AGENT_HANDS_BROWSER_TRANSPORT=tcp` to require remote-debugging TCP. The extension stops retrying after five unavailable-host attempts and releases its offscreen document.
 
 On a global install, run `npm update -g @zmerchant/agent-hands`; in a source checkout, run `git pull`. Neither update needs host reinstallation because the installed launcher points at the stable installation path. Re-run `agent-hands install-browser-host <extension-id>` after changing Node versions.

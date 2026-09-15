@@ -159,10 +159,23 @@ function manifestJson(launcherPath: string, ids: string[]): Record<string, unkno
 }
 
 async function defaultWriteLauncher(hostPath: string, nodePath: string): Promise<string> {
-  const launcher = await import(new URL("../../host/manifest.mjs", import.meta.url).href) as {
+  const launcher = await hostManifestModule();
+  return launcher.writeLauncher(hostPath, nodePath);
+}
+
+async function defaultLauncherPath(): Promise<string> {
+  const launcher = await hostManifestModule();
+  return launcher.launcherPath();
+}
+
+async function hostManifestModule(): Promise<{
+  launcherPath(): string;
+  writeLauncher(hostScript: string, nodePath: string): Promise<string>;
+}> {
+  return await import(new URL("../../host/manifest.mjs", import.meta.url).href) as {
+    launcherPath(): string;
     writeLauncher(hostScript: string, nodePath: string): Promise<string>;
   };
-  return launcher.writeLauncher(hostPath, nodePath);
 }
 
 export async function readBrowserHostRecord(options: Pick<InstallerOptions, "os" | "home" | "dataHome"> = {}): Promise<BrowserHostRecord | null> {
@@ -181,9 +194,9 @@ export async function installBrowserHost(options: InstallerOptions): Promise<str
   validateExtensionId(options.extensionId);
   const hostPath = await resolveStableHostPath(options);
   const nodePath = options.nodePath ?? process.execPath;
-  const launcherPath = await (options.writeLauncher ?? defaultWriteLauncher)(hostPath, nodePath);
   const directories = requestedDirectories(options);
   if (directories.length === 0) throw new Error("No supported browser native-host directories were found.");
+  const launcherPath = await (options.writeLauncher ?? defaultWriteLauncher)(hostPath, nodePath);
   const allIds = new Set<string>([options.extensionId]);
   const lines: string[] = [];
   for (const { browser, directory } of directories) {
@@ -211,7 +224,8 @@ export async function installBrowserHost(options: InstallerOptions): Promise<str
 }
 
 export async function uninstallBrowserHost(options: InstallerOptions = {}): Promise<string[]> {
-  const directories = requestedDirectories(options);
+  const effectiveOptions = options.browser ? options : { ...options, browser: "all" as const };
+  const directories = requestedDirectories(effectiveOptions);
   const lines: string[] = [];
   for (const { browser, directory } of directories) {
     const manifestPath = join(directory, HOST_FILE_NAME);
@@ -219,7 +233,7 @@ export async function uninstallBrowserHost(options: InstallerOptions = {}): Prom
     lines.push(`REMOVED ${browser}: ${manifestPath}`);
   }
   const record = await readBrowserHostRecord(options);
-  if (record) await rm(record.launcherPath, { force: true });
+  await rm(record?.launcherPath ?? await defaultLauncherPath(), { force: true });
   const os = options.os ?? platform();
   const home = options.home ?? homedir();
   await rm(recordPath(options.dataHome ?? defaultDataHome(os, home)), { force: true });
