@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -26,6 +26,7 @@ export type BrowserHostRecord = {
   hostPath: string;
   launcherPath: string;
   extensionIds: string[];
+  installedTargets: Array<{ browser: NativeMessagingBrowser; manifestPath: string }>;
   installedAt: string;
 };
 
@@ -122,12 +123,17 @@ async function sourceCheckout(hostPath: string): Promise<boolean> {
 }
 
 async function resolveStableHostPath(options: InstallerOptions): Promise<string> {
-  const hostPath = resolve(options.hostPath ?? process.env.AGENT_HANDS_HOST_PATH ?? defaultHostPath());
-  if (!isAbsolute(hostPath) || !await exists(hostPath)) throw new Error(`Native host script not found: ${hostPath}`);
+  const requestedHostPath = resolve(options.hostPath ?? process.env.AGENT_HANDS_HOST_PATH ?? defaultHostPath());
+  if (!isAbsolute(requestedHostPath) || !await exists(requestedHostPath)) throw new Error(`Native host script not found: ${requestedHostPath}`);
+  const hostPath = await realpath(requestedHostPath).catch(() => {
+    throw new Error(`Native host script not found: ${requestedHostPath}`);
+  });
   const segments = hostPath.split(sep);
-  const npmCache = await (options.npmCache ?? (() => npmValue(["config", "get", "cache"])))().catch(() => "");
+  const npmCachePath = await (options.npmCache ?? (() => npmValue(["config", "get", "cache"])))().catch(() => "");
+  const npmCache = npmCachePath ? await realpath(npmCachePath).catch(() => resolve(npmCachePath)) : "";
   if (segments.includes("_npx") || (npmCache && pathIsWithin(hostPath, npmCache))) throw new Error(STABLE_INSTALL_MESSAGE);
-  const npmRoot = await (options.npmRoot ?? (() => npmValue(["root", "-g"])))().catch(() => "");
+  const npmRootPath = await (options.npmRoot ?? (() => npmValue(["root", "-g"])))().catch(() => "");
+  const npmRoot = npmRootPath ? await realpath(npmRootPath).catch(() => resolve(npmRootPath)) : "";
   if ((npmRoot && pathIsWithin(hostPath, npmRoot)) || await sourceCheckout(hostPath)) return hostPath;
   throw new Error(STABLE_INSTALL_MESSAGE);
 }
@@ -138,6 +144,10 @@ async function loadManifest(path: string): Promise<Manifest> {
   } catch {
     return {};
   }
+}
+
+function dedupeTargets(targets: Array<{ browser: NativeMessagingBrowser; manifestPath: string }>): Array<{ browser: NativeMessagingBrowser; manifestPath: string }> {
+  return [...new Map(targets.map((target) => [target.manifestPath, target])).values()];
 }
 
 function extensionIds(manifest: Manifest): string[] {
@@ -156,6 +166,14 @@ function manifestJson(launcherPath: string, ids: string[]): Record<string, unkno
     type: "stdio",
     allowed_origins: ids.map((id) => `chrome-extension://${id}/`),
   };
+}
+
+async function extensionIdsForTargets(targets: Array<{ browser: NativeMessagingBrowser; manifestPath: string }>): Promise<string[]> {
+  const ids = new Set<string>();
+  for (const target of targets) {
+    for (const id of extensionIds(await loadManifest(target.manifestPath))) ids.add(id);
+  }
+  return [...ids].sort();
 }
 
 async function defaultWriteLauncher(hostPath: string, nodePath: string): Promise<string> {
@@ -183,7 +201,23 @@ export async function readBrowserHostRecord(options: Pick<InstallerOptions, "os"
   const home = options.home ?? homedir();
   const path = recordPath(options.dataHome ?? defaultDataHome(os, home));
   try {
-    return JSON.parse(await readFile(path, "utf8")) as BrowserHostRecord;
+    const record = JSON.parse(await readFile(path, "utf8")) as Partial<BrowserHostRecord>;
+    if (!record.version || !record.nodePath || !record.hostPath || !record.launcherPath) return null;
+    return {
+      version: record.version,
+      nodePath: record.nodePath,
+      hostPath: record.hostPath,
+      launcherPath: record.launcherPath,
+      extensionIds: Array.isArray(record.extensionIds) ? record.extensionIds.filter((id): id is string => typeof id === "string") : [],
+      installedTargets: Array.isArray(record.installedTargets)
+        ? record.installedTargets.filter((target): target is { browser: NativeMessagingBrowser; manifestPath: string } =>
+          typeof target === "object" && target !== null &&
+          ["chrome", "chromium", "edge", "brave"].includes((target as { browser?: string }).browser ?? "") &&
+          typeof (target as { manifestPath?: unknown }).manifestPath === "string",
+        )
+        : [],
+      installedAt: typeof record.installedAt === "string" ? record.installedAt : "",
+    };
   } catch {
     return null;
   }
@@ -197,13 +231,12 @@ export async function installBrowserHost(options: InstallerOptions): Promise<str
   const directories = requestedDirectories(options);
   if (directories.length === 0) throw new Error("No supported browser native-host directories were found.");
   const launcherPath = await (options.writeLauncher ?? defaultWriteLauncher)(hostPath, nodePath);
-  const allIds = new Set<string>([options.extensionId]);
+  const existingRecord = await readBrowserHostRecord(options);
+  const writtenTargets = directories.map(({ browser, directory }) => ({ browser, manifestPath: join(directory, HOST_FILE_NAME) }));
   const lines: string[] = [];
-  for (const { browser, directory } of directories) {
-    const manifestPath = join(directory, HOST_FILE_NAME);
+  for (const { browser, manifestPath } of writtenTargets) {
     const ids = new Set([...extensionIds(await loadManifest(manifestPath)), options.extensionId]);
-    for (const id of ids) allIds.add(id);
-    await mkdir(directory, { recursive: true });
+    await mkdir(dirname(manifestPath), { recursive: true });
     await writeFile(manifestPath, `${JSON.stringify(manifestJson(launcherPath, [...ids].sort()), null, 2)}\n`, "utf8");
     lines.push(`WROTE ${browser}: ${manifestPath}`);
   }
@@ -215,7 +248,14 @@ export async function installBrowserHost(options: InstallerOptions): Promise<str
     nodePath,
     hostPath,
     launcherPath,
-    extensionIds: [...allIds].sort(),
+    extensionIds: await extensionIdsForTargets(dedupeTargets([
+      ...(existingRecord?.installedTargets ?? []),
+      ...writtenTargets,
+    ])),
+    installedTargets: dedupeTargets([
+      ...(existingRecord?.installedTargets ?? []),
+      ...writtenTargets,
+    ]),
     installedAt: new Date().toISOString(),
   };
   await mkdir(dirname(recordPath(dataHome)), { recursive: true });
@@ -226,17 +266,34 @@ export async function installBrowserHost(options: InstallerOptions): Promise<str
 export async function uninstallBrowserHost(options: InstallerOptions = {}): Promise<string[]> {
   const effectiveOptions = options.browser ? options : { ...options, browser: "all" as const };
   const directories = requestedDirectories(effectiveOptions);
+  const record = await readBrowserHostRecord(options);
+  const selectedBrowser = effectiveOptions.browser ?? "all";
+  const selectedTargets = dedupeTargets([
+    ...directories.map(({ browser, directory }) => ({ browser, manifestPath: join(directory, HOST_FILE_NAME) })),
+    ...(record?.installedTargets ?? []).filter(({ browser }) => selectedBrowser === "all" || browser === selectedBrowser),
+  ]);
+  const removedPaths = new Set(selectedTargets.map(({ manifestPath }) => manifestPath));
   const lines: string[] = [];
-  for (const { browser, directory } of directories) {
-    const manifestPath = join(directory, HOST_FILE_NAME);
+  for (const { browser, manifestPath } of selectedTargets) {
     await rm(manifestPath, { force: true });
     lines.push(`REMOVED ${browser}: ${manifestPath}`);
   }
-  const record = await readBrowserHostRecord(options);
-  await rm(record?.launcherPath ?? await defaultLauncherPath(), { force: true });
   const os = options.os ?? platform();
   const home = options.home ?? homedir();
-  await rm(recordPath(options.dataHome ?? defaultDataHome(os, home)), { force: true });
+  const dataHome = options.dataHome ?? defaultDataHome(os, home);
+  const remainingTargets = (record?.installedTargets ?? []).filter(({ manifestPath }) => !removedPaths.has(manifestPath));
+  if (remainingTargets.length > 0 && record) {
+    const updatedRecord: BrowserHostRecord = {
+      ...record,
+      extensionIds: await extensionIdsForTargets(remainingTargets),
+      installedTargets: remainingTargets,
+      installedAt: new Date().toISOString(),
+    };
+    await writeFile(recordPath(dataHome), `${JSON.stringify(updatedRecord, null, 2)}\n`, "utf8");
+  } else {
+    await rm(record?.launcherPath ?? await defaultLauncherPath(), { force: true });
+    await rm(recordPath(dataHome), { force: true });
+  }
   return lines;
 }
 
@@ -244,16 +301,27 @@ export async function browserHostStatus(options: InstallerOptions = {}): Promise
   const lines: string[] = [];
   let healthy = true;
   const record = await readBrowserHostRecord(options);
-  for (const { browser, directory } of requestedDirectories({ ...options, browser: "all" })) {
-    const manifestPath = join(directory, HOST_FILE_NAME);
+  const installedPaths = new Set(record?.installedTargets.map(({ manifestPath }) => manifestPath) ?? []);
+  const targets = dedupeTargets([
+    ...requestedDirectories({ ...options, browser: "all" }).map(({ browser, directory }) => ({ browser, manifestPath: join(directory, HOST_FILE_NAME) })),
+    ...(record?.installedTargets ?? []),
+  ]);
+  for (const { browser, manifestPath } of targets) {
     const manifestExists = await exists(manifestPath);
-    if (manifestExists) lines.push(`PASS ${browser}: manifest present at ${manifestPath}`);
-    else lines.push(`PASS ${browser}: manifest not installed at ${manifestPath}`);
+    if (installedPaths.has(manifestPath) && manifestExists) lines.push(`PASS ${browser}: manifest present at ${manifestPath}`);
+    else if (installedPaths.has(manifestPath)) {
+      healthy = false;
+      lines.push(`PROBLEM ${browser}: manifest missing at ${manifestPath}. Run install-browser-host.`);
+    } else lines.push(`PASS ${browser}: manifest not installed at ${manifestPath}`);
   }
   if (!record) {
     healthy = false;
     lines.push("PROBLEM install record missing. Run install-browser-host.");
     return { lines, healthy };
+  }
+  if (record.installedTargets.length === 0) {
+    healthy = false;
+    lines.push("PROBLEM install record has no manifest targets. Run install-browser-host.");
   }
   if (await exists(record.launcherPath)) lines.push(`PASS launcher: ${record.launcherPath}`);
   else {

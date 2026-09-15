@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   browserHostDirectoriesFor,
   browserHostStatus,
   installBrowserHost,
+  readBrowserHostRecord,
   uninstallBrowserHost,
   validateExtensionId,
 } from "../src/browser/host-installer.js";
@@ -99,6 +100,18 @@ describe("browser host installer", () => {
     await expect(installBrowserHost({ extensionId, hostPath: globalHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher, npmRoot: async () => join(f.root, "global") })).resolves.toBeTruthy();
   });
 
+  it("refuses a source-checkout symlink whose target is in an npx cache", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const npxHost = join(f.root, "_npx", "host", "native-host.mjs");
+    const linkedHost = join(f.root, "host", "linked-native-host.mjs");
+    await mkdir(join(f.root, "_npx", "host"), { recursive: true });
+    await writeFile(npxHost, "export {};\n");
+    await symlink(npxHost, linkedHost);
+    await expect(installBrowserHost({ extensionId, hostPath: linkedHost, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).rejects.toThrow(STABLE_INSTALL_MESSAGE);
+    await expect(installBrowserHost({ extensionId, hostPath: f.hostPath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher })).resolves.toBeTruthy();
+  });
+
   it("accepts explicit and environment host-path overrides", async () => {
     const f = await fixture();
     roots.push(f.root);
@@ -136,6 +149,50 @@ describe("browser host installer", () => {
     for (const { directory } of f.directories) await expect(access(join(directory, "com.zmerchant.agenthands.json"))).rejects.toThrow();
     await expect(access(join(f.root, "launcher"))).rejects.toThrow();
     await expect(access(join(f.dataHome, "agent-hands", "browser-host-install.json"))).rejects.toThrow();
+  });
+
+  it("accumulates extension IDs and targets across separate browser installs", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    await installBrowserHost({ ...base, browser: "chrome", extensionId });
+    await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
+    const record = await readBrowserHostRecord({ dataHome: f.dataHome });
+    expect(record?.extensionIds).toEqual([extensionId, secondExtensionId]);
+    expect(record?.installedTargets.map(({ manifestPath }) => manifestPath).sort()).toEqual([
+      join(f.root, "brave", "com.zmerchant.agenthands.json"),
+      join(f.root, "chrome", "com.zmerchant.agenthands.json"),
+    ]);
+  });
+
+  it("reports a deleted installed manifest while ignoring a browser never installed", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    await installBrowserHost({ browser: "chrome", extensionId, hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher });
+    await rm(join(f.root, "chrome", "com.zmerchant.agenthands.json"));
+    const status = await browserHostStatus({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    expect(status.healthy).toBe(false);
+    expect(status.lines.join("\n")).toContain("PROBLEM chrome: manifest missing");
+    expect(status.lines.join("\n")).toContain("PASS brave: manifest not installed");
+  });
+
+  it("preserves the shared launcher and record until the final browser uninstall", async () => {
+    const f = await fixture();
+    roots.push(f.root);
+    const base = { hostPath: f.hostPath, nodePath: f.nodePath, manifestDirectories: f.directories, dataHome: f.dataHome, writeLauncher: f.writeLauncher };
+    await installBrowserHost({ ...base, browser: "chrome", extensionId });
+    await installBrowserHost({ ...base, browser: "brave", extensionId: secondExtensionId });
+    await uninstallBrowserHost({ browser: "chrome", manifestDirectories: f.directories, dataHome: f.dataHome });
+    const remaining = await readBrowserHostRecord({ dataHome: f.dataHome });
+    const braveManifest = JSON.parse(await readFile(join(f.root, "brave", "com.zmerchant.agenthands.json"), "utf8"));
+    await expect(access(join(f.root, "launcher"))).resolves.toBeUndefined();
+    expect(braveManifest.path).toBe(remaining?.launcherPath);
+    expect(remaining?.extensionIds).toEqual([secondExtensionId]);
+    expect(remaining?.installedTargets).toEqual([{ browser: "brave", manifestPath: join(f.root, "brave", "com.zmerchant.agenthands.json") }]);
+    await uninstallBrowserHost({ manifestDirectories: f.directories, dataHome: f.dataHome });
+    await expect(access(join(f.root, "brave", "com.zmerchant.agenthands.json"))).rejects.toThrow();
+    await expect(access(join(f.root, "launcher"))).rejects.toThrow();
+    await expect(readBrowserHostRecord({ dataHome: f.dataHome })).resolves.toBeNull();
   });
 
   it("reports dead launcher dependencies and version drift", async () => {
