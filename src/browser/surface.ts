@@ -105,6 +105,17 @@ async function ensureRoot(): Promise<CDPClient> {
   return rootCDP;
 }
 
+export async function closeBrowserConnection(): Promise<void> {
+  const cdp = rootCDP;
+  const connection = extensionConnection;
+  rootCDP = null;
+  extensionConnection = null;
+  for (const bridge of bridges.values()) bridge.close();
+  bridges.clear();
+  cdp?.close();
+  await connection?.close();
+}
+
 async function getPages(cdp: CDPClient): Promise<Array<{ targetId: string; title: string; url: string }>> {
   const result = await cdp.send("Target.getTargets");
   const targets = (result.targetInfos as any[]) ?? [];
@@ -248,8 +259,8 @@ async function handleSingleAction(
     } catch (e: unknown) {
       if (process.env.AGENT_HANDS_BROWSER_TRANSPORT === "extension") throw e;
       throw new Error(
-        "Automatic browser launch requires a Linux systemd session. " +
-          "Start your browser with --remote-debugging-port=9222."
+        `Browser connection failed: ${e instanceof Error ? e.message : String(e)}. ` +
+          "Reload the agent-hands extension and install its browser host, or start Chrome with --remote-debugging-port=9222."
       );
     }
   }
@@ -300,6 +311,7 @@ async function handleSingleAction(
     }
     for (const b of bridges.values()) b.close();
     bridges.clear();
+    await closeBrowserConnection();
     return { result: "All tab bridges closed." };
   }
 

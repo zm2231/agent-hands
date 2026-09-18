@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { COMPUTER_USE_PLUGIN_ROOT, type BrokerComponents } from "./verify.js";
 import { validateOfficialToolInventory } from "./official-schemas.js";
 import type { ContentBlock } from "../../kernel/types.js";
+import { runningVersion } from "../../version.js";
 
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const MAX_RESULT_BYTES = 25 * 1024 * 1024;
@@ -153,7 +154,7 @@ export class BrokerSession {
       this.reader = createLineReader(this.proc);
 
       await this.request("initialize", {
-        clientInfo: { name: "agent-hands", title: "agent-hands", version: "0.1.0" },
+        clientInfo: { name: "agent-hands", title: "agent-hands", version: runningVersion() },
         capabilities: { mcpServerOpenaiFormElicitation: true },
       }, 15_000);
 

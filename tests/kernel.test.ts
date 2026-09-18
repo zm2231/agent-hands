@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { validateArgs } from "../src/kernel/validate.js";
 import { sanitizeError } from "../src/kernel/sanitize.js";
+import { createServer } from "../src/kernel/server.js";
+import { runningVersion } from "../src/version.js";
 
 describe("validateArgs", () => {
   const schema = {
@@ -61,5 +63,11 @@ describe("sanitizeError", () => {
     const long = "x".repeat(600);
     const result = sanitizeError(long);
     expect(result.length).toBeLessThanOrEqual(501); // 500 + ellipsis
+  });
+});
+
+describe("server version", () => {
+  it("reports the package version through the MCP server status", async () => {
+    expect((await createServer([]).status()).version).toBe(runningVersion());
   });
 });
