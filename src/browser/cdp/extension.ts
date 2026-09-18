@@ -1,7 +1,7 @@
-import { createServer, type Server, type Socket } from "node:net";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createConnection, type Socket } from "node:net";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createCDPClient } from "./client.js";
 import type { CDPClient, CDPMessage, CDPTransport } from "./types.js";
@@ -18,10 +18,11 @@ type HostMessage = {
   result?: Record<string, unknown>;
   error?: { code?: number | string; message: string };
   ok?: boolean;
-  op?: "listTabs" | "attach" | "detach" | "createTarget";
+  op?: "listTabs" | "attach" | "detach" | "createTarget" | "disconnect";
   sessionId?: string;
   tabId?: number;
   token?: string;
+  controllerId?: string;
   url?: string;
 };
 
@@ -36,12 +37,27 @@ export interface ExtensionConnection {
   close(): Promise<void>;
 }
 
-function configPath(): string {
-  return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "agent-hands", "browser-host.json");
+function brokerSocketPath(): string {
+  return process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET ?? join(process.env.XDG_RUNTIME_DIR ?? tmpdir(), "agent-hands-browser.sock");
 }
 
-function socketPath(): string {
-  return join(tmpdir(), `agent-hands-${process.pid}-${randomBytes(6).toString("hex")}.sock`);
+function controllerDirectory(): string {
+  return process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "agent-hands", "browser-host.d");
+}
+
+function controllerPath(controllerId: string): string {
+  return join(controllerDirectory(), `${controllerId}.json`);
+}
+
+async function writeControllerToken(controllerId: string, token: string): Promise<void> {
+  await mkdir(controllerDirectory(), { recursive: true, mode: 0o700 });
+  const path = controllerPath(controllerId);
+  await writeFile(path, JSON.stringify({ token }), { mode: 0o600 });
+  await chmod(path, 0o600);
+}
+
+async function removeControllerToken(controllerId: string): Promise<void> {
+  await rm(controllerPath(controllerId), { force: true });
 }
 
 function encode(message: HostMessage): Buffer {
@@ -89,7 +105,7 @@ class ExtensionTransport implements CDPTransport {
   private readonly closeHandlers = new Set<(error?: Error) => void>();
   private closed = false;
 
-  constructor(private readonly socket: Socket) {
+  constructor(private readonly socket: Socket, private readonly controllerId: string) {
     attachFrames(socket, (message) => this.handle(message), () => this.notifyClose());
   }
 
@@ -98,6 +114,7 @@ class ExtensionTransport implements CDPTransport {
     if (!message.method) throw new Error("CDP command method is required.");
     const envelope: HostMessage = {
       id: message.id,
+      controllerId: this.controllerId,
       kind: "cdp",
       method: message.method,
       params: message.params,
@@ -178,62 +195,54 @@ class ExtensionTransport implements CDPTransport {
   }
 }
 
-async function removeConfig(path: string, socketPath: string, token: string): Promise<void> {
-  try {
-    const current = JSON.parse(await readFile(path, "utf8")) as { socketPath?: string; token?: string };
-    if (current.socketPath === socketPath && current.token === token) await rm(path, { force: true });
-  } catch {}
-}
-
 export async function createExtensionConnection(timeoutMs = CONNECTION_TIMEOUT_MS): Promise<ExtensionConnection> {
-  const path = socketPath();
+  const path = brokerSocketPath();
+  const controllerId = randomBytes(16).toString("hex");
   const token = randomBytes(32).toString("hex");
-  const config = configPath();
-  await mkdir(dirname(config), { recursive: true, mode: 0o700 });
-  await writeFile(config, JSON.stringify({ socketPath: path, token }), { mode: 0o600 });
-  await chmod(config, 0o600);
-
-  let server: Server | undefined;
-  let socket: Socket | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  await writeControllerToken(controllerId, token);
+  let socket!: Socket;
   try {
     socket = await new Promise<Socket>((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(`Timed out waiting for the agent-hands Chrome extension. Load extension/ unpacked and register host/native-host.mjs as com.zmerchant.agenthands.`)), timeoutMs);
-      server = createServer((candidate) => {
-        if (socket) {
-          candidate.destroy();
-          return;
-        }
-        attachFrames(candidate, (message) => {
-          if (message.kind !== "auth" || message.token !== token) {
-            candidate.destroy(new Error("Unauthenticated browser host."));
-            return;
-          }
-          clearTimeout(timer);
-          socket = candidate;
-          resolve(candidate);
+    let settled = false;
+    let candidate: Socket | undefined;
+    const finish = (error?: Error, connected?: Socket) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(connected!);
+    };
+    const attempt = () => {
+      if (settled) return;
+      candidate = createConnection(path);
+      candidate.once("error", () => { candidate?.destroy(); if (!settled) setTimeout(attempt, 100); });
+      candidate.once("connect", () => {
+        attachFrames(candidate!, (message) => {
+          if (message.kind !== "auth" || message.controllerId !== controllerId || message.ok !== true) return;
+          finish(undefined, candidate);
           return true;
         }, () => {});
+        candidate!.write(encode({ kind: "auth", controllerId, token }));
       });
-      server.once("error", reject);
-      server.listen(path);
+    };
+    const timer = setTimeout(() => { candidate?.destroy(); finish(new Error(`Timed out waiting for the agent-hands Chrome broker at ${path}. Reload the extension and verify its native host installation.`)); }, timeoutMs);
+    attempt();
     });
-    const transport = new ExtensionTransport(socket);
+    const transport = new ExtensionTransport(socket, controllerId);
     return {
       client: createCDPClient(transport),
       async close() {
-        transport.close();
-        await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
-        await rm(path, { force: true });
-        await removeConfig(config, path, token);
+        try {
+          await new Promise<void>((resolve, reject) => socket.write(encode({ kind: "control", op: "disconnect", controllerId }), (error) => error ? reject(error) : resolve()));
+          await new Promise<void>((resolve) => socket.end(resolve));
+        } finally {
+          await removeControllerToken(controllerId);
+        }
       },
     };
   } catch (error) {
-    if (timer) clearTimeout(timer);
     socket?.destroy();
-    await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
-    await rm(path, { force: true });
-    await removeConfig(config, path, token);
+    await removeControllerToken(controllerId);
     throw error;
   }
 }

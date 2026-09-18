@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { connect, type Socket } from "node:net";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createExtensionConnection } from "../src/browser/cdp/extension.js";
@@ -13,160 +13,83 @@ function frame(value: unknown): Buffer {
   return output;
 }
 
-function readFrames(socket: Socket, handler: (message: Record<string, unknown>) => void): void {
+function frames(socket: Socket, handler: (value: Record<string, unknown>) => void): void {
   let buffered = Buffer.alloc(0);
   socket.on("data", (chunk) => {
     buffered = Buffer.concat([buffered, chunk]);
     while (buffered.length >= 4) {
-      const size = buffered.readUInt32LE(0);
-      if (buffered.length < size + 4) return;
-      const body = buffered.subarray(4, size + 4);
-      buffered = buffered.subarray(size + 4);
-      handler(JSON.parse(body.toString("utf8")) as Record<string, unknown>);
+      const length = buffered.readUInt32LE(0);
+      if (buffered.length < length + 4) return;
+      const value = JSON.parse(buffered.subarray(4, length + 4).toString("utf8")) as Record<string, unknown>;
+      buffered = buffered.subarray(4 + length);
+      handler(value);
     }
   });
 }
 
-async function readConfig(configHome: string): Promise<{ socketPath: string; token: string }> {
-  const path = join(configHome, "agent-hands", "browser-host.json");
-  for (let attempt = 0; attempt < 200; attempt++) {
-    try {
-      return JSON.parse(await readFile(path, "utf8")) as { socketPath: string; token: string };
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-  throw new Error("browser-host.json was never written");
-}
-
-async function connectWithRetry(socketPath: string): Promise<Socket> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const socket = connect(socketPath);
-    const outcome = await new Promise<"ok" | "retry">((resolve) => {
-      socket.once("connect", () => resolve("ok"));
-      socket.once("error", () => resolve("retry"));
-    });
-    if (outcome === "ok") return socket;
-    socket.destroy();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("host socket never accepted a connection");
-}
-
-describe("extension transport (real createExtensionConnection)", () => {
+describe("extension broker transport", () => {
   const cleanups: Array<() => Promise<void> | void> = [];
-  const previousHome = process.env.XDG_CONFIG_HOME;
-
+  const prior = process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET;
+  const priorControllerDirectory = process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR;
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-    if (previousHome === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = previousHome;
+    if (prior === undefined) delete process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET;
+    else process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET = prior;
+    if (priorControllerDirectory === undefined) delete process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR;
+    else process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR = priorControllerDirectory;
   });
 
-  it("authenticates a host and routes createTarget as a control operation", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "agent-hands-ext-"));
-    cleanups.push(() => rm(dir, { recursive: true, force: true }));
-    process.env.XDG_CONFIG_HOME = dir;
-
-    const connectionPromise = createExtensionConnection();
-    const config = await readConfig(dir);
-    const host = await connectWithRetry(config.socketPath);
-    cleanups.push(() => void host.destroy());
-
-    const received: Array<Record<string, unknown>> = [];
-    readFrames(host, (message) => {
-      received.push(message);
-      if (message.kind === "control" && message.op === "createTarget") {
-        host.write(frame({ id: message.id, kind: "control", op: "createTarget", ok: true, result: { targetId: 42 } }));
-      }
-    });
-
-    host.write(frame({ kind: "auth", token: config.token }));
-    const connection = await connectionPromise;
-    cleanups.push(() => connection.close());
-
-    const result = await connection.client.send("Target.createTarget", { url: "https://example.com" });
-
-    const control = received.find((message) => message.op === "createTarget");
-    expect(control).toMatchObject({ kind: "control", op: "createTarget", url: "https://example.com" });
-    expect(control).not.toHaveProperty("method");
-    expect(result).toEqual({ targetId: 42 });
+  it("routes two controllers independently and releases only the closing controller", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-broker-"));
+    const path = join(directory, "broker.sock");
+    process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET = path;
+    process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR = join(directory, "controllers");
+    cleanups.push(() => rm(directory, { recursive: true, force: true }));
+    const active = new Set<string>();
+    const server = createServer((socket) => frames(socket, (message) => {
+      const controllerId = message.controllerId as string;
+      if (message.kind === "auth") {
+        active.add(controllerId);
+        socket.write(frame({ kind: "auth", controllerId, ok: true }));
+      } else if (message.op === "disconnect") active.delete(controllerId);
+      else socket.write(frame({ id: message.id, kind: message.kind, op: message.op, controllerId, ok: true, result: message.op === "listTabs" ? { tabs: [{ tabId: controllerId.length, title: controllerId, url: "https://example.test" }] } : {} }));
+    }));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    await new Promise<void>((resolve) => server.listen(path, resolve));
+    const first = await createExtensionConnection();
+    const second = await createExtensionConnection();
+    expect((await first.client.send("Target.getTargets")).targetInfos).toHaveLength(1);
+    expect((await second.client.send("Target.getTargets")).targetInfos).toHaveLength(1);
+    expect(active.size).toBe(2);
+    await first.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(active.size).toBe(1);
+    await expect(second.client.send("Target.getTargets")).resolves.toMatchObject({ targetInfos: [{ url: "https://example.test" }] });
+    await second.close();
   });
 
-  it("removes the socket and config after a timed out connection", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "agent-hands-ext-"));
-    cleanups.push(() => rm(dir, { recursive: true, force: true }));
-    process.env.XDG_CONFIG_HOME = dir;
-
-    const connection = createExtensionConnection(20);
-    const config = await readConfig(dir);
-
-    await expect(connection).rejects.toThrow("Timed out waiting");
-    await expect(access(config.socketPath)).rejects.toThrow();
-    await expect(readFile(join(dir, "agent-hands", "browser-host.json"), "utf8")).rejects.toThrow();
+  it("reports a missing broker without creating a config rendezvous", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-broker-"));
+    process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET = join(directory, "missing.sock");
+    process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR = join(directory, "controllers");
+    cleanups.push(() => rm(directory, { recursive: true, force: true }));
+    await expect(createExtensionConnection(20)).rejects.toThrow();
   });
 
-  it("drops an unauthenticated host and keeps the authenticated controller working", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "agent-hands-ext-"));
-    cleanups.push(() => rm(dir, { recursive: true, force: true }));
-    process.env.XDG_CONFIG_HOME = dir;
-
-    const connectionPromise = createExtensionConnection();
-    const config = await readConfig(dir);
-
-    const imposter = await connectWithRetry(config.socketPath);
-    const imposterClosed = new Promise<void>((resolve) => imposter.once("close", () => resolve()));
-    imposter.write(frame({ kind: "auth", token: "wrong-token" }));
-    await imposterClosed;
-
-    const host = await connectWithRetry(config.socketPath);
-    cleanups.push(() => void host.destroy());
-    readFrames(host, (message) => {
-      if (message.kind === "control" && message.op === "listTabs") {
-        host.write(frame({ id: message.id, kind: "control", op: "listTabs", ok: true, result: { tabs: [{ tabId: 7, title: "T", url: "https://a" }] } }));
-      }
-    });
-    host.write(frame({ kind: "auth", token: config.token }));
-    const connection = await connectionPromise;
-    cleanups.push(() => connection.close());
-
-    const tabs = await connection.client.send("Target.getTargets");
-    expect(tabs).toEqual({ targetInfos: [{ targetId: "7", type: "page", title: "T", url: "https://a" }] });
-  });
-
-  it("refuses a second host without crashing the process and keeps the first controller working", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "agent-hands-ext-"));
-    cleanups.push(() => rm(dir, { recursive: true, force: true }));
-    process.env.XDG_CONFIG_HOME = dir;
-
-    const connectionPromise = createExtensionConnection();
-    const config = await readConfig(dir);
-
-    const host = await connectWithRetry(config.socketPath);
-    cleanups.push(() => void host.destroy());
-    readFrames(host, (message) => {
-      if (message.kind === "control" && message.op === "listTabs") {
-        host.write(frame({ id: message.id, kind: "control", op: "listTabs", ok: true, result: { tabs: [{ tabId: 7, title: "T", url: "https://a" }] } }));
-      }
-    });
-    host.write(frame({ kind: "auth", token: config.token }));
-    const connection = await connectionPromise;
-    cleanups.push(() => connection.close());
-
-    const uncaught: Error[] = [];
-    const onUncaught = (error: Error) => uncaught.push(error);
-    process.on("uncaughtException", onUncaught);
-    cleanups.push(() => process.off("uncaughtException", onUncaught));
-
-    const second = await connectWithRetry(config.socketPath);
-    const secondClosed = new Promise<void>((resolve) => second.once("close", () => resolve()));
-    second.write(frame({ kind: "auth", token: config.token }));
-    await secondClosed;
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(uncaught).toEqual([]);
-
-    const tabs = await connection.client.send("Target.getTargets");
-    expect(tabs).toEqual({ targetInfos: [{ targetId: "7", type: "page", title: "T", url: "https://a" }] });
+  it("waits for a broker that starts while the extension host is reconnecting", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-broker-"));
+    const path = join(directory, "broker.sock");
+    process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET = path;
+    process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR = join(directory, "controllers");
+    cleanups.push(() => rm(directory, { recursive: true, force: true }));
+    const server = createServer((socket) => frames(socket, (message) => {
+      if (message.kind === "auth") socket.write(frame({ kind: "auth", controllerId: message.controllerId, ok: true }));
+    }));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const connecting = createExtensionConnection(500);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => server.listen(path, resolve));
+    const connection = await connecting;
+    await connection.close();
   });
 });
