@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.4.1...agent-hands-v0.5.0) (2026-09-18)
+
+
+### Features
+
+* multiplex browser extension controllers ([#19](https://github.com/zm2231/agent-hands/issues/19)) ([a66ccb9](https://github.com/zm2231/agent-hands/commit/a66ccb9837b146eb9bf2ff62784f1a016d52a7fa))
+
+
+### Bug Fixes
+
+* sync browser and server versions ([#18](https://github.com/zm2231/agent-hands/issues/18)) ([790df4a](https://github.com/zm2231/agent-hands/commit/790df4aca186bccac7e2c8a8f48531dfaba0db67))
+
 ## [0.4.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.4.0...agent-hands-v0.4.1) (2026-09-15)
 
 
