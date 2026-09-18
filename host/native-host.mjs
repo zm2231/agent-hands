@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-import { createConnection } from "node:net";
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { createServer } from "node:net";
+import { chmod, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const MAX_EXTENSION_TO_HOST_BYTES = 64 * 1024 * 1024;
 const MAX_HOST_TO_EXTENSION_BYTES = 1024 * 1024;
+const socketPath = process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET ?? join(process.env.XDG_RUNTIME_DIR ?? tmpdir(), "agent-hands-browser.sock");
+const controllers = new Map();
 
 function frame(value, maxBytes) {
   const body = Buffer.from(JSON.stringify(value));
@@ -16,7 +18,7 @@ function frame(value, maxBytes) {
   return output;
 }
 
-function readFrames(stream, maxBytes, handler) {
+function readFrames(stream, maxBytes, handler, onInvalid) {
   let buffered = Buffer.alloc(0);
   stream.on("data", (chunk) => {
     try {
@@ -29,17 +31,41 @@ function readFrames(stream, maxBytes, handler) {
         buffered = buffered.subarray(size + 4);
         handler(JSON.parse(body.toString("utf8")));
       }
-    } catch {
-      process.exit(1);
-    }
+    } catch { onInvalid(); }
   });
 }
 
-const configPath = process.env.AGENT_HANDS_NATIVE_HOST_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "agent-hands", "browser-host.json");
-const config = JSON.parse(await readFile(configPath, "utf8"));
-const socket = createConnection(config.socketPath);
-socket.once("connect", () => socket.write(frame({ kind: "auth", token: config.token }, MAX_EXTENSION_TO_HOST_BYTES)));
-socket.once("error", () => process.exit(1));
-socket.once("close", () => process.exit(0));
-readFrames(process.stdin, MAX_EXTENSION_TO_HOST_BYTES, (message) => socket.write(frame(message, MAX_EXTENSION_TO_HOST_BYTES)));
-readFrames(socket, MAX_HOST_TO_EXTENSION_BYTES, (message) => process.stdout.write(frame(message, MAX_HOST_TO_EXTENSION_BYTES)));
+function sendNative(message) {
+  try { process.stdout.write(frame(message, MAX_HOST_TO_EXTENSION_BYTES)); } catch { process.exit(1); }
+}
+
+function disconnectController(controllerId) {
+  if (!controllers.delete(controllerId)) return;
+  sendNative({ kind: "control", op: "disconnect", controllerId });
+}
+
+await rm(socketPath, { force: true });
+const server = createServer((socket) => {
+  let controllerId;
+  readFrames(socket, MAX_EXTENSION_TO_HOST_BYTES, (message) => {
+    if (!controllerId) {
+      if (message.kind !== "auth" || typeof message.controllerId !== "string" || !message.controllerId || typeof message.token !== "string" || message.token.length < 32 || controllers.has(message.controllerId)) return socket.destroy();
+      controllerId = message.controllerId;
+      controllers.set(controllerId, socket);
+      socket.write(frame({ kind: "auth", controllerId, ok: true }, MAX_EXTENSION_TO_HOST_BYTES));
+      return;
+    }
+    if (message.controllerId !== controllerId) return socket.destroy();
+    sendNative(message);
+  }, () => socket.destroy());
+  socket.once("close", () => { if (controllerId) disconnectController(controllerId); });
+});
+server.once("error", () => process.exit(1));
+server.listen(socketPath, async () => { await chmod(socketPath, 0o600); });
+
+readFrames(process.stdin, MAX_EXTENSION_TO_HOST_BYTES, (message) => {
+  if (typeof message.controllerId !== "string") return;
+  const socket = controllers.get(message.controllerId);
+  if (socket && !socket.destroyed) socket.write(frame(message, MAX_EXTENSION_TO_HOST_BYTES));
+}, () => process.exit(1));
+process.stdin.once("end", () => server.close(() => process.exit(0)));
