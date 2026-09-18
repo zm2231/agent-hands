@@ -102,9 +102,7 @@ By default the browser surface uses the unpacked MV3 extension when its native-h
 
 On a global install, run `npm update -g @zmerchant/agent-hands`; in a source checkout, run `git pull`. Neither update needs host reinstallation because the installed launcher points at the stable installation path. Re-run `agent-hands install-browser-host <extension-id>` after changing Node versions.
 
-The CLI writes its socket path and a per-run auth token to `~/.config/agent-hands/browser-host.json` (mode `0600`) automatically; you do not create that file. With this transport, `browser start` attaches to your live tabs; it does not launch Chrome.
-
-The native host reads one active controller configuration, so run one extension-transport agent-hands server at a time.
+The native host exposes a per-user stable local broker socket. Each agent-hands server authenticates as its own controller, so separate controllers can drive different claimed tabs concurrently. A tab already claimed by another controller is rejected rather than shared silently. With this transport, `browser start` attaches to your live tabs; it does not launch Chrome.
 
 ## Configuration
 
@@ -134,7 +132,7 @@ Or in your MCP config:
 
 The desktop surface dispatches to OpenAI's signed `codex app-server` binary (the same one Codex uses) through a retained session. The agent never runs its own model; it just executes what your agent asks for. Sessions stay alive across calls so Computer Use activation persists between reading the screen and acting on it. 30 seconds of idle closes the session automatically; if it dies, the next call creates a fresh one.
 
-The browser surface speaks the Chrome DevTools Protocol over one of two transports, chosen automatically. When the extension's native-host manifest is installed and reachable, it drives your real logged-in Chrome through an unpacked MV3 extension and a native-messaging host, bridged to the server over an authenticated per-run socket; commands run via `chrome.debugger`, so there is no separate debug profile and no `--remote-debugging-port` flag. Without the extension it falls back to CDP over Chrome's remote-debugging port. `AGENT_HANDS_BROWSER_TRANSPORT` forces either path.
+The browser surface speaks the Chrome DevTools Protocol over one of two transports, chosen automatically. When the extension's native-host manifest is installed and reachable, it drives your real logged-in Chrome through an unpacked MV3 extension and a native-messaging broker, bridged to servers over authenticated controller connections; commands run via `chrome.debugger`, so there is no separate debug profile and no `--remote-debugging-port` flag. Without the extension it falls back to CDP over Chrome's remote-debugging port. `AGENT_HANDS_BROWSER_TRANSPORT` forces either path.
 
 ## License
 
