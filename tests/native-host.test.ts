@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { connect, type Socket } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -34,6 +34,10 @@ async function open(path: string): Promise<Socket> {
   }
 }
 
+function closed(socket: Socket): Promise<boolean> {
+  return new Promise((resolve) => socket.once("close", resolve));
+}
+
 describe("native browser broker", () => {
   const processes: ChildProcess[] = [];
   const directories: string[] = [];
@@ -46,22 +50,79 @@ describe("native browser broker", () => {
     const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
     directories.push(directory);
     const path = join(directory, "broker.sock");
-    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path }, stdio: ["pipe", "pipe", "pipe"] });
+    const controllerDirectory = join(directory, "controllers");
+    await mkdir(controllerDirectory);
+    await Promise.all([
+      writeFile(join(controllerDirectory, "11111111111111111111111111111111.json"), JSON.stringify({ token: "a".repeat(64) })),
+      writeFile(join(controllerDirectory, "22222222222222222222222222222222.json"), JSON.stringify({ token: "b".repeat(64) })),
+    ]);
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path, AGENT_HANDS_BROWSER_CONTROLLER_DIR: controllerDirectory }, stdio: ["pipe", "pipe", "pipe"] });
     processes.push(host);
     const first = await open(path);
     const second = await open(path);
-    first.write(frame({ kind: "auth", controllerId: "one", token: "a".repeat(32) }));
-    second.write(frame({ kind: "auth", controllerId: "two", token: "b".repeat(32) }));
-    await expect(nextFrame(first)).resolves.toMatchObject({ kind: "auth", controllerId: "one", ok: true });
-    await expect(nextFrame(second)).resolves.toMatchObject({ kind: "auth", controllerId: "two", ok: true });
-    first.write(frame({ id: 1, kind: "control", op: "listTabs", controllerId: "one" }));
-    second.write(frame({ id: 2, kind: "control", op: "listTabs", controllerId: "two" }));
-    await expect(nextFrame(host.stdout)).resolves.toMatchObject({ id: 1, controllerId: "one" });
-    await expect(nextFrame(host.stdout)).resolves.toMatchObject({ id: 2, controllerId: "two" });
-    host.stdin.write(frame({ id: 2, controllerId: "two", kind: "control", ok: true, result: {} }));
-    await expect(nextFrame(second)).resolves.toMatchObject({ id: 2, controllerId: "two" });
+    const firstId = "11111111111111111111111111111111";
+    const secondId = "22222222222222222222222222222222";
+    first.write(frame({ kind: "auth", controllerId: firstId, token: "a".repeat(64) }));
+    second.write(frame({ kind: "auth", controllerId: secondId, token: "b".repeat(64) }));
+    await expect(nextFrame(first)).resolves.toMatchObject({ kind: "auth", controllerId: firstId, ok: true });
+    await expect(nextFrame(second)).resolves.toMatchObject({ kind: "auth", controllerId: secondId, ok: true });
+    first.write(frame({ id: 1, kind: "control", op: "listTabs", controllerId: firstId }));
+    await expect(nextFrame(host.stdout)).resolves.toMatchObject({ id: 1, controllerId: firstId });
+    second.write(frame({ id: 2, kind: "control", op: "listTabs", controllerId: secondId }));
+    await expect(nextFrame(host.stdout)).resolves.toMatchObject({ id: 2, controllerId: secondId });
+    host.stdin.write(frame({ id: 2, controllerId: secondId, kind: "control", ok: true, result: {} }));
+    await expect(nextFrame(second)).resolves.toMatchObject({ id: 2, controllerId: secondId });
+    const unauthenticated = await open(path);
+    unauthenticated.write(frame({ kind: "auth", controllerId: firstId, token: "wrong" }));
+    await expect(closed(unauthenticated)).resolves.toBe(false);
     first.destroy();
-    await expect(nextFrame(host.stdout)).resolves.toMatchObject({ op: "disconnect", controllerId: "one" });
+    await expect(nextFrame(host.stdout)).resolves.toMatchObject({ op: "disconnect", controllerId: firstId });
     second.destroy();
+  });
+
+  it("relays a native result larger than 1 MB to its authenticated controller", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const path = join(directory, "broker.sock");
+    const controllerDirectory = join(directory, "controllers");
+    const controllerId = "33333333333333333333333333333333";
+    await mkdir(controllerDirectory);
+    await writeFile(join(controllerDirectory, `${controllerId}.json`), JSON.stringify({ token: "c".repeat(64) }));
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path, AGENT_HANDS_BROWSER_CONTROLLER_DIR: controllerDirectory }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    const client = await open(path);
+    client.write(frame({ kind: "auth", controllerId, token: "c".repeat(64) }));
+    await expect(nextFrame(client)).resolves.toMatchObject({ kind: "auth", controllerId, ok: true });
+    const data = "A".repeat(1024 * 1024 + 1);
+    host.stdin.write(frame({ id: 8, controllerId, kind: "cdp", ok: true, result: { data } }));
+    await expect(nextFrame(client)).resolves.toEqual({ id: 8, controllerId, kind: "cdp", ok: true, result: { data } });
+    expect(host.exitCode).toBeNull();
+    client.destroy();
+  });
+
+  it("fails closed on malformed native frames", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const path = join(directory, "broker.sock");
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    const oversized = Buffer.allocUnsafe(4);
+    oversized.writeUInt32LE(64 * 1024 * 1024 + 1, 0);
+    host.stdin.write(oversized);
+    await expect(new Promise<number | null>((resolve) => host.once("exit", (code) => resolve(code)))).resolves.toBe(1);
+  });
+
+  it("fails closed on invalid native JSON", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const path = join(directory, "broker.sock");
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    const invalid = Buffer.from("not-json");
+    const malformed = Buffer.allocUnsafe(4 + invalid.length);
+    malformed.writeUInt32LE(invalid.length, 0);
+    invalid.copy(malformed, 4);
+    host.stdin.write(malformed);
+    await expect(new Promise<number | null>((resolve) => host.once("exit", (code) => resolve(code)))).resolves.toBe(1);
   });
 });

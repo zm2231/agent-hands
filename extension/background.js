@@ -19,7 +19,7 @@ function send(message) {
 }
 
 async function closeBrowserSession() {
-  for (const { tabId } of sessions.values()) await chrome.debugger.detach({ tabId }).catch(() => {});
+  for (const tabId of new Set([...sessions.values()].map(({ tabId }) => tabId))) await chrome.debugger.detach({ tabId }).catch(() => {});
   sessions.clear();
   tabOwners.clear();
   await chrome.offscreen.closeDocument().catch(() => {});

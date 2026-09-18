@@ -1,5 +1,6 @@
 import { createConnection, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createCDPClient } from "./client.js";
@@ -38,6 +39,25 @@ export interface ExtensionConnection {
 
 function brokerSocketPath(): string {
   return process.env.AGENT_HANDS_BROWSER_BROKER_SOCKET ?? join(process.env.XDG_RUNTIME_DIR ?? tmpdir(), "agent-hands-browser.sock");
+}
+
+function controllerDirectory(): string {
+  return process.env.AGENT_HANDS_BROWSER_CONTROLLER_DIR ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "agent-hands", "browser-host.d");
+}
+
+function controllerPath(controllerId: string): string {
+  return join(controllerDirectory(), `${controllerId}.json`);
+}
+
+async function writeControllerToken(controllerId: string, token: string): Promise<void> {
+  await mkdir(controllerDirectory(), { recursive: true, mode: 0o700 });
+  const path = controllerPath(controllerId);
+  await writeFile(path, JSON.stringify({ token }), { mode: 0o600 });
+  await chmod(path, 0o600);
+}
+
+async function removeControllerToken(controllerId: string): Promise<void> {
+  await rm(controllerPath(controllerId), { force: true });
 }
 
 function encode(message: HostMessage): Buffer {
@@ -179,31 +199,50 @@ export async function createExtensionConnection(timeoutMs = CONNECTION_TIMEOUT_M
   const path = brokerSocketPath();
   const controllerId = randomBytes(16).toString("hex");
   const token = randomBytes(32).toString("hex");
-  const socket = await new Promise<Socket>((resolve, reject) => {
-    const candidate = createConnection(path);
-    const timer = setTimeout(() => { candidate.destroy(); reject(new Error(`Timed out waiting for the agent-hands Chrome broker at ${path}. Reload the extension and verify its native host installation.`)); }, timeoutMs);
-    candidate.once("error", (error) => { clearTimeout(timer); reject(error); });
-    candidate.once("connect", () => {
-      attachFrames(candidate, (message) => {
-        if (message.kind !== "auth" || message.controllerId !== controllerId || message.ok !== true) return;
-        clearTimeout(timer);
-        resolve(candidate);
-        return true;
-      }, () => {});
-      candidate.write(encode({ kind: "auth", controllerId, token }));
-    });
-  });
+  await writeControllerToken(controllerId, token);
+  let socket!: Socket;
   try {
+    socket = await new Promise<Socket>((resolve, reject) => {
+    let settled = false;
+    let candidate: Socket | undefined;
+    const finish = (error?: Error, connected?: Socket) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(connected!);
+    };
+    const attempt = () => {
+      if (settled) return;
+      candidate = createConnection(path);
+      candidate.once("error", () => { candidate?.destroy(); if (!settled) setTimeout(attempt, 100); });
+      candidate.once("connect", () => {
+        attachFrames(candidate!, (message) => {
+          if (message.kind !== "auth" || message.controllerId !== controllerId || message.ok !== true) return;
+          finish(undefined, candidate);
+          return true;
+        }, () => {});
+        candidate!.write(encode({ kind: "auth", controllerId, token }));
+      });
+    };
+    const timer = setTimeout(() => { candidate?.destroy(); finish(new Error(`Timed out waiting for the agent-hands Chrome broker at ${path}. Reload the extension and verify its native host installation.`)); }, timeoutMs);
+    attempt();
+    });
     const transport = new ExtensionTransport(socket, controllerId);
     return {
       client: createCDPClient(transport),
       async close() {
-        await new Promise<void>((resolve, reject) => socket.write(encode({ kind: "control", op: "disconnect", controllerId }), (error) => error ? reject(error) : resolve()));
-        await new Promise<void>((resolve) => socket.end(resolve));
+        try {
+          await new Promise<void>((resolve, reject) => socket.write(encode({ kind: "control", op: "disconnect", controllerId }), (error) => error ? reject(error) : resolve()));
+          await new Promise<void>((resolve) => socket.end(resolve));
+        } finally {
+          await removeControllerToken(controllerId);
+        }
       },
     };
   } catch (error) {
-    socket.destroy();
+    socket?.destroy();
+    await removeControllerToken(controllerId);
     throw error;
   }
 }
