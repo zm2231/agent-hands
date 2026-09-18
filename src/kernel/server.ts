@@ -15,8 +15,9 @@ import { sanitizeError } from "./sanitize.js";
 import { buildStatus } from "./status.js";
 import { validateArgs } from "./validate.js";
 import { auditAppend } from "./audit.js";
+import { runningVersion } from "../version.js";
 
-const VERSION = "0.1.0";
+const VERSION = runningVersion();
 
 export function createServer(surfaces: SurfaceDescriptor[]): {
   run(): Promise<void>;

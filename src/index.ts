@@ -65,8 +65,10 @@ async function main() {
   const server = createServer(surfaces);
 
   const { closePool } = await import("./desktop/broker/dispatch.js");
+  const { closeBrowserConnection } = await import("./browser/surface.js");
   const shutdown = async () => {
     await closePool().catch(() => {});
+    await closeBrowserConnection().catch(() => {});
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);
