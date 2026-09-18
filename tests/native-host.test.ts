@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { connect, type Socket } from "node:net";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -97,6 +97,51 @@ describe("native browser broker", () => {
     host.stdin.write(frame({ id: 8, controllerId, kind: "cdp", ok: true, result: { data } }));
     await expect(nextFrame(client)).resolves.toEqual({ id: 8, controllerId, kind: "cdp", ok: true, result: { data } });
     expect(host.exitCode).toBeNull();
+    client.destroy();
+  });
+
+  it("removes a controller token file when its connection closes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const path = join(directory, "broker.sock");
+    const controllerDirectory = join(directory, "controllers");
+    const controllerId = "44444444444444444444444444444444";
+    const tokenPath = join(controllerDirectory, `${controllerId}.json`);
+    await mkdir(controllerDirectory);
+    await writeFile(tokenPath, JSON.stringify({ token: "d".repeat(64) }));
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env: { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path, AGENT_HANDS_BROWSER_CONTROLLER_DIR: controllerDirectory }, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    const client = await open(path);
+    client.write(frame({ kind: "auth", controllerId, token: "d".repeat(64) }));
+    await expect(nextFrame(client)).resolves.toMatchObject({ kind: "auth", controllerId, ok: true });
+    client.destroy();
+    await nextFrame(host.stdout);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (!(await access(tokenPath).then(() => true, () => false))) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await expect(access(tokenPath)).rejects.toThrow();
+  });
+
+  it("rebinds over a stale socket file left by a dead broker", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-hands-native-host-"));
+    directories.push(directory);
+    const path = join(directory, "broker.sock");
+    const controllerDirectory = join(directory, "controllers");
+    const controllerId = "55555555555555555555555555555555";
+    await mkdir(controllerDirectory);
+    await writeFile(join(controllerDirectory, `${controllerId}.json`), JSON.stringify({ token: "e".repeat(64) }));
+    const env = { ...process.env, AGENT_HANDS_BROWSER_BROKER_SOCKET: path, AGENT_HANDS_BROWSER_CONTROLLER_DIR: controllerDirectory };
+    const dead = spawn(process.execPath, [resolve("host/native-host.mjs")], { env, stdio: ["pipe", "pipe", "pipe"] });
+    const early = await open(path);
+    early.destroy();
+    dead.kill("SIGKILL");
+    await new Promise((resolve) => dead.once("exit", resolve));
+    const host = spawn(process.execPath, [resolve("host/native-host.mjs")], { env, stdio: ["pipe", "pipe", "pipe"] });
+    processes.push(host);
+    const client = await open(path);
+    client.write(frame({ kind: "auth", controllerId, token: "e".repeat(64) }));
+    await expect(nextFrame(client)).resolves.toMatchObject({ kind: "auth", controllerId, ok: true });
     client.destroy();
   });
 

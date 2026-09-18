@@ -43,6 +43,7 @@ function sendNative(message) {
 
 function disconnectController(controllerId) {
   if (!controllers.delete(controllerId)) return;
+  void rm(join(controllerDirectory, `${controllerId}.json`), { force: true });
   sendNative({ kind: "control", op: "disconnect", controllerId });
 }
 
@@ -65,7 +66,7 @@ async function activeBroker() {
 }
 
 if (await activeBroker()) process.exit(0);
-await rm(socketPath, { force: true });
+let rebound = false;
 const server = createServer((socket) => {
   let controllerId;
   readFrames(socket, MAX_EXTENSION_TO_HOST_BYTES, (message) => {
@@ -81,7 +82,16 @@ const server = createServer((socket) => {
   }, () => socket.destroy());
   socket.once("close", () => { if (controllerId) disconnectController(controllerId); });
 });
-server.once("error", () => process.exit(1));
+server.on("error", async (error) => {
+  if (error.code === "EADDRINUSE" && !rebound) {
+    rebound = true;
+    if (await activeBroker()) process.exit(0);
+    await rm(socketPath, { force: true });
+    server.listen(socketPath, () => void chmod(socketPath, 0o600).catch(() => server.close(() => process.exit(1))));
+    return;
+  }
+  process.exit(1);
+});
 server.once("close", () => { void rm(socketPath, { force: true }); });
 server.listen(socketPath, async () => {
   try { await chmod(socketPath, 0o600); } catch { server.close(() => process.exit(1)); }
