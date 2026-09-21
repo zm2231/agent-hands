@@ -179,8 +179,7 @@ export async function executePipeline(
     responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
 
     return {
-      content: responseContent,
-      structuredContent: details,
+      content: [...responseContent, { type: "text", text: JSON.stringify(details) } as ContentBlock],
       isError: result.isError,
     };
   } catch (e: unknown) {

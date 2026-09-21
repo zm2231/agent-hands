@@ -27,7 +27,7 @@ describe("desktop pipeline MCP response", () => {
     });
   });
 
-  it("returns native-compatible execution metadata as structuredContent", async () => {
+  it("appends execution metadata as a trailing content block, never structuredContent", async () => {
     const { executePipeline } = await import("../src/desktop/pipeline.js");
     const audit = vi.fn().mockResolvedValue(undefined);
     const result = await executePipeline("click", { app: "Test", element_index: "1" }, {
@@ -35,7 +35,10 @@ describe("desktop pipeline MCP response", () => {
       audit,
       elicit: vi.fn().mockResolvedValue({ action: "accept" }),
     } as any);
-    expect(result.structuredContent).toMatchObject({
+    expect(result.structuredContent).toBeUndefined();
+    expect(result.content[0]).toEqual({ type: "text", text: "ok" });
+    const metadata = JSON.parse((result.content.at(-1) as any).text);
+    expect(metadata).toMatchObject({
       method: "click",
       app: "com.test.app",
       directCalls: 2,
@@ -47,7 +50,7 @@ describe("desktop pipeline MCP response", () => {
       backgroundPreserved: true,
       brokerCleanupVerified: true,
     });
-    expect((result.structuredContent as any).ephemeralThread).toBeUndefined();
+    expect(metadata.ephemeralThread).toBeUndefined();
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ directCalls: 2, elicitationRequests: 1 }));
   });
 });
