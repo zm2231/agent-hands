@@ -42,10 +42,6 @@ vi.mock("../src/desktop/broker/dispatch.js", async (importOriginal) => {
       async (_components: any, _method: string, _args: any, options: any) => {
         const bigContent = [{ type: "text", text: "x".repeat(5 * 1024 * 1024) }];
         const followUpResults = (options?.followUpCalls ?? []).map((_fu: any, i: number) => {
-          // After ~4 results (5 MB each = 25 MB), content should be omitted
-          // But since this is the MOCK and not the real dispatch,
-          // we need to test via the real dispatch's aggregate cap.
-          // Actually, let me test differently — check content sizes in results.
           return {
             content: bigContent,
             isError: i === 18, // Last one has an error
@@ -82,9 +78,9 @@ describe("batch aggregate memory bound (mocked)", () => {
     const responseBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
     expect(responseBytes).toBeLessThanOrEqual(25 * 1024 * 1024);
 
-    // Execution count should reflect all 20 calls.
-    const body = JSON.parse((result.content[0] as any).text);
-    expect(body.actions_executed).toBe(20);
+    const text = (result.content as any[]).map((b) => b.text ?? "").join("\n");
+    expect(text).toContain("output omitted (response size limit)");
+    expect(text).not.toContain("stopped:");
 
     // Error from the last follow-up should be preserved in the isError flag.
     expect(result.isError).toBe(true);

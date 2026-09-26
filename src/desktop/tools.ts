@@ -17,6 +17,7 @@ const ACTION_ANNOTATIONS: ToolAnnotations = {
 };
 
 const APP_DESC = "App name, full app path, or unambiguous bundle identifier";
+const SCREENSHOT_PROP = { type: "boolean", description: "Include a screenshot with the returned app state. Defaults to false." };
 
 export const DESKTOP_TOOLS: ToolDefinition[] = [
   {
@@ -32,10 +33,10 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   {
     name: "get_app_state",
     description:
-      "Get the accessibility tree and screenshot of an app. This must be called once per assistant turn before interacting with the app.",
+      "Get the accessibility tree of an app, plus a screenshot when requested. This must be called once per assistant turn before interacting with the app.",
     inputSchema: {
       type: "object",
-      properties: { app: { type: "string", description: APP_DESC } },
+      properties: { app: { type: "string", description: APP_DESC }, screenshot: SCREENSHOT_PROP },
       required: ["app"],
       additionalProperties: false,
     },
@@ -48,7 +49,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         click_count: {
           type: "integer",
           description: "Number of clicks. Defaults to 1",
@@ -74,7 +75,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
         action: {
           type: "string",
@@ -93,7 +94,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
         value: { type: "string", description: "Value to set" },
       },
@@ -112,7 +113,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
           type: "string",
           description: "App name or bundle identifier",
         },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
         text: {
           type: "string",
@@ -138,7 +139,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
         direction: {
           type: "string",
@@ -161,7 +162,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         from_x: { type: "number", description: "Start X" },
         from_y: { type: "number", description: "Start Y" },
         to_x: { type: "number", description: "End X" },
@@ -179,7 +180,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         key: { type: "string", description: "Key in xdotool syntax (e.g. \"a\", \"Return\", \"super+c\")" },
       },
       required: ["app", "key"],
@@ -194,7 +195,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
-        observe: { type: "boolean", description: "When true, automatically returns the updated app state (AX tree + screenshot) after the action completes. Saves a round-trip." },
+        screenshot: SCREENSHOT_PROP,
         text: { type: "string", description: "Text to type" },
       },
       required: ["app", "text"],
@@ -220,7 +221,8 @@ export const DESKTOP_BATCH_TOOL: ToolDefinition = {
         description:
           "Array of actions to execute. Each object must have a 'method' field " +
           "(one of the desktop tool names except list_apps and desktop_batch) " +
-          "and the parameters for that method.",
+          "and the parameters for that method. Mutations report ok or an error; " +
+          "use get_app_state (optionally with screenshot: true) to return state.",
         items: {
           type: "object",
           properties: {

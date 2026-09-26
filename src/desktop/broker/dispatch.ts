@@ -7,6 +7,11 @@ const MAX_RESULT_BYTES = 25 * 1024 * 1024;
 export interface FollowUpCall {
   tool: string;
   arguments: Record<string, unknown>;
+  keepImages?: boolean;
+}
+
+function withImages(content: ContentBlock[], keep: boolean | undefined): ContentBlock[] {
+  return keep === false ? content.filter((b) => b.type !== "image") : content;
 }
 
 export interface BrokerResult {
@@ -53,6 +58,7 @@ export async function brokerDispatch(
     followUpCalls?: FollowUpCall[];
     continueOnError?: boolean;
     requireActivationFor?: string;
+    keepImages?: boolean;
   } = {}
 ): Promise<BrokerResult> {
   const lease = await acquireSession(components);
@@ -71,7 +77,7 @@ export async function brokerDispatch(
       elicitationRequests += activation.elicitationRequests;
       if (activation.isError) {
         return {
-          content: activation.content,
+          content: withImages(activation.content, options.keepImages),
           structuredContent: activation.structuredContent,
           isError: true,
           modelTurnsStarted: activation.modelTurnsStarted,
@@ -94,7 +100,7 @@ export async function brokerDispatch(
       session.markAppActivated(args.app);
     }
 
-    const content = primary.content;
+    const content = withImages(primary.content, options.keepImages);
     const isError = primary.isError;
 
     const MAX_AGGREGATE_BYTES = 25 * 1024 * 1024;
@@ -117,7 +123,7 @@ export async function brokerDispatch(
           session.markAppActivated(followUp.arguments.app);
         }
 
-        const fuContent = fuResult.content;
+        const fuContent = withImages(fuResult.content, followUp.keepImages);
         const fuIsError = fuResult.isError;
         const fuContentBytes = Buffer.byteLength(JSON.stringify(fuContent), "utf8");
 

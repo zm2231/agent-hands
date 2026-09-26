@@ -10,7 +10,9 @@ import { verifyBrokerComponents } from "./broker/verify.js";
 import { brokerDispatch } from "./broker/dispatch.js";
 
 import { sanitizeError } from "../kernel/sanitize.js";
-import { trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
+import { trimAxTree, trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
+import { DESKTOP_TOOLS } from "./tools.js";
+import { validateArgs } from "../kernel/validate.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -68,26 +70,18 @@ export async function executePipeline(
     // Verify and dispatch through the broker.
     const components = await verifyBrokerComponents();
 
-    // Auto-snapshot: when observe is true on a mutation, append get_app_state
-    // as a follow-up call in the same broker session (one spawn, two tool/calls).
-    const isMutation = method !== "list_apps" && method !== "get_app_state";
-    const observe = isMutation && args.observe === true;
     const cleanArgs = { ...args };
-    delete cleanArgs.observe; // Strip observe before sending to upstream tool.
+    delete cleanArgs.screenshot;
 
-    const followUpCalls = observe && bundleId
-      ? [{ tool: "get_app_state", arguments: { app: bundleId } }]
-      : [];
-
-    const isMutationCall = method !== "list_apps" && method !== "get_app_state";
+    const isMutation = method !== "list_apps" && method !== "get_app_state";
     const result = await brokerDispatch(components, method, cleanArgs, {
       signal: ctx.signal,
       onElicitation: async (params) => {
         const resp = await ctx.elicit(params);
         return { action: resp.action };
       },
-      followUpCalls,
-      requireActivationFor: isMutationCall ? bundleId ?? undefined : undefined,
+      requireActivationFor: isMutation ? bundleId ?? undefined : undefined,
+      keepImages: args.screenshot === true,
     });
 
     // Assert zero-turn architecture.
@@ -101,60 +95,28 @@ export async function executePipeline(
     // Finish focus telemetry (takes final sample after dispatch).
     const telemetry = await focusFinish!();
 
-    // Build response.
-    const details = {
-      runId,
-      method,
-      permissionMode: "no-permissions",
-      app: bundleId,
-      outcome,
-      directCalls: result.directCalls,
-      modelTurnsStarted: 0,
-      ephemeralRuntimeContext: true,
-      elicitationRequests: result.elicitationRequests,
-      brokerVersion: components.codexVersion,
-      clientBuild: components.clientBuild,
-      durationMs: Date.now() - new Date(startedAt).getTime(),
-      backgroundPreserved: telemetry.backgroundPreserved,
-      unrelatedFocusChanges: telemetry.unrelatedFocusChanges,
-      brokerCleanupVerified: true,
-    };
-
-    // Audit.
     await ctx.audit({
       timestamp: startedAt,
       runId,
       method,
       permissionMode: "no-permissions",
       app: bundleId ?? `target-sha256:${runId.slice(0, 16)}`,
-      mutating: method !== "list_apps" && method !== "get_app_state",
+      mutating: isMutation,
       outcome,
-      durationMs: details.durationMs,
+      durationMs: Date.now() - new Date(startedAt).getTime(),
       brokerVersion: components.codexVersion,
       clientBuild: components.clientBuild,
       directCalls: result.directCalls,
       elicitationRequests: result.elicitationRequests,
       modelTurnsStarted: 0,
       ephemeralThread: true,
+      ephemeralRuntimeContext: true,
       brokerCleanupVerified: true,
+      backgroundPreserved: telemetry.backgroundPreserved,
+      unrelatedFocusChanges: telemetry.unrelatedFocusChanges,
     });
 
-    // Merge follow-up results (e.g. auto-snapshot) into response content.
     let responseContent = result.content;
-    if (result.followUpResults?.length) {
-      const parts: ContentBlock[] = [...result.content];
-      for (const fu of result.followUpResults) {
-        if (!fu.isError) {
-          parts.push(...fu.content);
-        } else {
-          parts.push({
-            type: "text",
-            text: "[observe] Post-action snapshot failed.",
-          } as ContentBlock);
-        }
-      }
-      responseContent = parts;
-    }
 
     // Trim large AX trees: cap element text values, save full to tmp if needed.
     const hasLargeText = responseContent.some(
@@ -178,10 +140,7 @@ export async function executePipeline(
     }
     responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
 
-    return {
-      content: [...responseContent, { type: "text", text: JSON.stringify(details) } as ContentBlock],
-      isError: result.isError,
-    };
+    return { content: responseContent, isError: result.isError };
   } catch (e: unknown) {
     // Finish focus telemetry even on error (takes final sample).
     if (focusFinish) {
@@ -250,22 +209,27 @@ export async function executeBatchPipeline(
       throw new Error(`Batch exceeds maximum of 20 actions (got ${actions.length}).`);
     }
 
-    // Validate action methods: must be known mutation/read tools, not batch-in-batch.
-    const BATCHABLE_METHODS = new Set([
-      "get_app_state", "click", "type_text", "press_key", "set_value",
-      "select_text", "scroll", "drag", "perform_secondary_action",
-    ]);
-    for (const a of actions) {
+    const batchable = new Map(
+      DESKTOP_TOOLS.filter((t) => t.name !== "list_apps").map((t) => [t.name, t.inputSchema])
+    );
+    actions.forEach((a, i) => {
       if (!a.method || typeof a.method !== "string") {
         throw new Error("Each batch action must have a string 'method' field.");
       }
-      if (!BATCHABLE_METHODS.has(a.method)) {
+      const schema = batchable.get(a.method);
+      if (!schema) {
         throw new Error(
           `Invalid batch method "${a.method}". ` +
-          `Allowed: ${[...BATCHABLE_METHODS].join(", ")}.`
+          `Allowed: ${[...batchable.keys()].join(", ")}.`
         );
       }
-    }
+      const { method: _method, ...actionArgs } = a;
+      if ("app" in actionArgs) {
+        throw new Error(`Batch action #${i + 1} (${a.method}): app is set once for the whole batch, not per action.`);
+      }
+      const err = validateArgs({ ...actionArgs, app }, schema);
+      if (err) throw new Error(`Batch action #${i + 1} (${a.method}): ${err}`);
+    });
 
     // Resolve app identity once for the whole batch.
     const identity = await resolveAppIdentity(app);
@@ -288,38 +252,30 @@ export async function executeBatchPipeline(
     focusStop = focus.stop;
     focusFinish = focus.finish;
 
-    // Normalize keys, rewrite app, and strip agent-hands-only flags in all actions.
     const normalized = actions.map((a) => {
       const args: Record<string, unknown> = { ...a, app: bundleId };
       delete args.method;
-      delete args.observe; // agent-hands control flag, not an upstream tool argument
+      delete args.screenshot;
       if (a.method === "press_key" && typeof args.key === "string") {
         args.key = normalizeKey(args.key);
       }
-      return { method: a.method, args };
+      return { method: a.method, args, screenshot: a.screenshot === true };
     });
 
-    // Verify broker components once.
     const components = await verifyBrokerComponents();
 
-    // Split into primary (first) + follow-ups (rest).
-    // Auto-activate: if the batch doesn't start with get_app_state,
-    // prepend one to establish the CUA context.
-    if (normalized[0].method !== "get_app_state" && normalized[0].method !== "list_apps") {
-      normalized.unshift({ method: "get_app_state", args: { app: bundleId } });
+    // The broker needs a get_app_state to establish CUA context; its output is not returned.
+    const implicitActivation = normalized[0].method !== "get_app_state";
+    if (implicitActivation) {
+      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot });
     }
     const [primary, ...rest] = normalized;
 
-    // Build follow-up calls for brokerDispatch.
-    const followUpCalls = rest.map((r) => ({
-      tool: r.method,
-      arguments: r.args,
-    }));
-
     const result = await brokerDispatch(components, primary.method, primary.args, {
       signal: ctx.signal,
-      followUpCalls,
+      followUpCalls: rest.map((r) => ({ tool: r.method, arguments: r.args, keepImages: r.screenshot })),
       continueOnError,
+      keepImages: primary.screenshot,
     });
 
     // Assert zero-turn architecture.
@@ -328,82 +284,15 @@ export async function executeBatchPipeline(
       throw new Error("violated the zero-model-turn architecture");
     }
 
-    // Finish focus telemetry.
     const telemetry = await focusFinish!();
 
-    // Collect ALL execution results first (for correct metadata).
-    function batchContent(method: string, content: ContentBlock[], isError: boolean): ContentBlock[] {
-      const textOnly = (content as any[]).filter((b: any) => b.type === "text");
-      if (isError) {
-        return textOnly.length > 0
-          ? textOnly
-          : [{ type: "text", text: "Error (no text content returned)" } as ContentBlock];
-      }
-      if (method === "get_app_state") {
-        return trimContentBlocks(textOnly) as ContentBlock[];
-      }
-      return [{ type: "text", text: `${method}: ok` } as ContentBlock];
-    }
-
-    const allResults: Array<{ method: string; content: ContentBlock[]; isError: boolean }> = [];
-    allResults.push({
-      method: primary.method,
-      content: batchContent(primary.method, result.content, result.isError),
-      isError: result.isError,
-    });
-    if (result.followUpResults) {
-      for (let i = 0; i < result.followUpResults.length; i++) {
-        const fu = result.followUpResults[i];
-        allResults.push({
-          method: rest[i].method,
-          content: batchContent(rest[i].method, fu.content, fu.isError),
-          isError: fu.isError,
-        });
-      }
-    }
-
-    // Execution facts from ALL results (before response truncation).
-    const totalExecuted = allResults.length;
-    const anyError = allResults.some((r) => r.isError);
+    const executed = [
+      { ...primary, content: result.content, isError: result.isError },
+      ...(result.followUpResults ?? []).map((fu, i) => ({ ...rest[i], content: fu.content, isError: fu.isError })),
+    ];
+    const anyError = executed.some((r) => r.isError);
     outcome = anyError ? "official_error" : "ok";
 
-    // Truncate response payload to fit 25 MB aggregate.
-    const MAX_BATCH_RESPONSE_BYTES = 25 * 1024 * 1024;
-    const ENVELOPE_RESERVE = 4096;
-    let aggregateBytes = 0;
-    let truncatedAt: number | null = null;
-    const responseResults: typeof allResults = [];
-
-    for (let i = 0; i < allResults.length; i++) {
-      const entry = allResults[i];
-      const entryBytes = Buffer.byteLength(JSON.stringify(entry), "utf8");
-      if (aggregateBytes + entryBytes + ENVELOPE_RESERVE > MAX_BATCH_RESPONSE_BYTES && responseResults.length > 0) {
-        truncatedAt = i;
-        break;
-      }
-      aggregateBytes += entryBytes;
-      responseResults.push(entry);
-    }
-
-    const details = {
-      runId,
-      method: "desktop_batch",
-      permissionMode: "no-permissions",
-      app: bundleId,
-      outcome,
-      directCalls: totalExecuted,
-
-      modelTurnsStarted: 0,
-      ephemeralRuntimeContext: true,
-      brokerVersion: components.codexVersion,
-      clientBuild: components.clientBuild,
-      durationMs: Date.now() - new Date(startedAt).getTime(),
-      backgroundPreserved: telemetry.backgroundPreserved,
-      unrelatedFocusChanges: telemetry.unrelatedFocusChanges,
-      brokerCleanupVerified: true,
-    };
-
-    // Audit.
     await ctx.audit({
       timestamp: startedAt,
       runId,
@@ -412,67 +301,19 @@ export async function executeBatchPipeline(
       app: bundleId,
       mutating: true,
       outcome,
-      durationMs: details.durationMs,
+      durationMs: Date.now() - new Date(startedAt).getTime(),
       brokerVersion: components.codexVersion,
       clientBuild: components.clientBuild,
-      directCalls: totalExecuted,
+      directCalls: executed.length,
       modelTurnsStarted: 0,
       ephemeralThread: true,
+      ephemeralRuntimeContext: true,
       brokerCleanupVerified: true,
+      backgroundPreserved: telemetry.backgroundPreserved,
+      unrelatedFocusChanges: telemetry.unrelatedFocusChanges,
     });
 
-    // Build response: array of per-action results as a single text block.
-    // Build candidate result and verify full envelope size.
-    let candidateResults = responseResults;
-    let candidateBody: Record<string, unknown>;
-    let candidate: { content: ContentBlock[]; isError: boolean };
-
-    // Shrink response until the full ToolResult envelope fits 25 MB.
-    // Can shrink to zero results; even the empty response is bounded.
-    while (true) {
-      candidateBody = {
-        batch: true,
-        actions_executed: totalExecuted,
-        actions_returned: candidateResults.length,
-        actions_requested: actions.length,
-        results: candidateResults,
-      };
-      if (candidateResults.length < allResults.length) {
-        const omitted = totalExecuted - candidateResults.length;
-        candidateBody.truncated = true;
-        candidateBody.truncated_at = candidateResults.length;
-        candidateBody.truncation_reason =
-          `Aggregate response exceeded 25 MB limit; ${omitted} executed result(s) omitted from response.`;
-        if (anyError) {
-          candidateBody.has_omitted_errors = allResults.slice(candidateResults.length).some((r) => r.isError);
-        }
-      }
-
-      candidate = {
-        content: [{ type: "text", text: JSON.stringify(candidateBody) }],
-        isError: anyError,
-      };
-
-      const envelopeBytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
-      if (envelopeBytes <= MAX_BATCH_RESPONSE_BYTES) break;
-
-      if (candidateResults.length === 0) {
-        // Even the empty response exceeds the limit — return minimal fallback.
-        return {
-          content: [{ type: "text", text: JSON.stringify({
-            batch: true, actions_executed: totalExecuted, actions_returned: 0,
-            actions_requested: actions.length, results: [],
-            truncated: true, truncation_reason: "All results omitted; response exceeded size limit.",
-          }) }],
-          isError: true,
-        };
-      }
-
-      // Remove last result and retry.
-      candidateResults = candidateResults.slice(0, -1);
-    }
-
-    return candidate;
+    return { content: renderBatch(executed, implicitActivation, actions.length), isError: anyError };
   } catch (e: unknown) {
     if (focusFinish) {
       try { await focusFinish(); } catch { /* non-fatal */ }
@@ -502,4 +343,56 @@ export async function executeBatchPipeline(
       try { await lock.release(); } catch { /* logged, not re-thrown */ }
     }
   }
+}
+
+const MAX_BATCH_RESPONSE_BYTES = 25 * 1024 * 1024 - 64 * 1024;
+
+interface ExecutedAction {
+  method: string;
+  content: ContentBlock[];
+  isError: boolean;
+}
+
+export function renderBatch(executed: ExecutedAction[], implicitActivation: boolean, requested: number): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  let lines: string[] = [];
+  let bytes = 0;
+  const flush = () => {
+    if (lines.length) blocks.push({ type: "text", text: lines.join("\n") });
+    lines = [];
+  };
+  const emit = (text: string, images: ContentBlock[]) => {
+    const size = Buffer.byteLength(JSON.stringify(text), "utf8") +
+      images.reduce((n, b) => n + Buffer.byteLength(JSON.stringify(b), "utf8"), 0);
+    if (bytes + size > MAX_BATCH_RESPONSE_BYTES) return false;
+    bytes += size;
+    lines.push(text);
+    if (images.length) {
+      flush();
+      blocks.push(...images);
+    }
+    return true;
+  };
+
+  executed.forEach((r, i) => {
+    const step = implicitActivation ? i : i + 1;
+    if (step === 0 && !r.isError) return;
+    const label = step === 0 ? "activation" : `#${step} ${r.method}`;
+    const text = r.content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+    const images = r.content.filter((b) => b.type === "image");
+    let fitted: boolean;
+    if (r.isError) {
+      fitted = emit(`${label}: error\n${text || "(no error text returned)"}`, images);
+    } else if (r.method === "get_app_state") {
+      fitted = emit(`${label}\n${trimAxTree(text).text}`, images);
+    } else {
+      fitted = emit(`${label}: ok`, images);
+    }
+    if (!fitted) lines.push(`${label}: ${r.isError ? "error, " : ""}output omitted (response size limit)`);
+  });
+
+  const ran = executed.length - (implicitActivation ? 1 : 0);
+  if (ran < requested) lines.push(`stopped: ${ran} of ${requested} actions ran`);
+  flush();
+  return blocks;
 }
