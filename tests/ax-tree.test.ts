@@ -117,6 +117,14 @@ describe("line grammar", () => {
     expect(save.fields).toEqual({ Help: "Enter Value: here" });
   });
 
+  it("reads fields after a capitalized one-word app role", () => {
+    const text = tree("1 Event Description: Lunch. Starts at 12:00 PM., Help: Calendar event", "2 button Report Description: Publish");
+    const event = parseAxTree(text).find((n) => n.index === "1")!;
+    expect(event.fields).toEqual({ Description: "Lunch. Starts at 12:00 PM.", Help: "Calendar event" });
+    expect(resolveIn(text, { name: "Lunch. Starts at 12:00 PM." })).toBe("1");
+    expect(resolveIn(text, { name: "Publish" })).toMatch(/^No element matches/);
+  });
+
   it("reads fields after app-defined roles and names without a role", () => {
     const text = tree("1 change calculator mode Description: Change Mode, ID: Mode: basic", "2 Edit, ID: EditMenu_MenuItem", "3 outline sidebar");
     expect(resolveIn(text, { name: "Change Mode" })).toBe("1");
@@ -190,6 +198,19 @@ describe("state regions", () => {
     expect(findInTree(text, "reachable").split("\n")[0]).toBe('find "reachable": 1 of 3 elements');
     const compact = compactTree(text, 50, 0)!.text.split("\n");
     expect(compact.slice(0, 5)).toEqual(["<app_state>", "0 standard window W", "\t2 button Reachable", "\t… 1 more", ""]);
+  });
+
+  it("ends the tree at any trailing note once no new elements follow", () => {
+    const text = ["<app_state>", "0 standard window W", "\t1 link Album", "", "Note: In order to be usable, app links must be rewritten.", "</app_state>"].join("\n");
+    const tree = readAxTree(text);
+    expect(tree.nodes[1].line).toBe("link Album");
+    expect(tree.trailer).toEqual(["", "Note: In order to be usable, app links must be rewritten.", "</app_state>"]);
+  });
+
+  it("keeps elements that follow a note-like value line", () => {
+    const text = ["<app_state>", "0 standard window W", "\t1 text Value: intro", "Note: In order to be usable, app links must be rewritten.", "\t2 button Reachable", "</app_state>"].join("\n");
+    expect(readAxTree(text).nodes.map((n) => n.index)).toEqual(["0", "1", "2"]);
+    expect(resolveTarget(text, parseTarget({ name: "Reachable" }))).toMatchObject({ node: { index: "2" } });
   });
 
   it("treats an element listed only after a Selected: line as a real element", () => {
