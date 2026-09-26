@@ -189,7 +189,7 @@ export async function executePipeline(
     } else if (!result.isError && view.find) {
       responseContent = [{ type: "text", text: findInTree(stateText(result.content), view.find) }, ...images(result.content)];
     }
-    const compact = method === "get_app_state" && !result.isError && !view.find && !view.full;
+    const compact = !result.isError && !view.find && !view.full && method !== "list_apps";
 
     // Trim large AX trees: cap element text values, save full to tmp if needed.
     const hasLargeText = responseContent.some(

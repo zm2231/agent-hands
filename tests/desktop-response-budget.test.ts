@@ -344,6 +344,14 @@ describe("compact view", () => {
     expect(await readFile(path, "utf8")).toBe(huge);
   });
 
+  it("returns the tree after a mutation compact as well", async () => {
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: BIG }]));
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const text = ((await executePipeline("click", { app: "Test", element_index: "5" }, ctx())).content[0] as any).text as string;
+    expect(text).toMatch(/of 502 elements shown;/);
+    expect(text.length).toBeLessThan(5600);
+  });
+
   it("leaves small trees unchanged", async () => {
     brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: TREE }]));
     const { executePipeline } = await import("../src/desktop/pipeline.js");
