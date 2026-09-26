@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.0...agent-hands-v0.6.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **desktop:** return the tree after a mutation in compact form ([#31](https://github.com/zm2231/agent-hands/issues/31)) ([992c24d](https://github.com/zm2231/agent-hands/commit/992c24d6282e732e7427d46c046ab5dcf67954b9))
+
 ## [0.6.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.5.1...agent-hands-v0.6.0) (2026-09-26)
 
 
