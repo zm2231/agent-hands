@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.5.1...agent-hands-v0.6.0) (2026-09-26)
+
+
+### Features
+
+* **desktop:** act on elements by label and search the accessibility tree ([#26](https://github.com/zm2231/agent-hands/issues/26)) ([95329fa](https://github.com/zm2231/agent-hands/commit/95329fabff7e44127c24f849315fc35aa147b05f))
+
+
+### Bug Fixes
+
+* **desktop:** read fields after one-word app roles and end the tree at any trailing note ([#29](https://github.com/zm2231/agent-hands/issues/29)) ([311e53c](https://github.com/zm2231/agent-hands/commit/311e53c58ce52e4d67cd2169d0632e83d92021fe))
+* **desktop:** return large accessibility trees compact and parse state sections by their format ([#28](https://github.com/zm2231/agent-hands/issues/28)) ([42bf486](https://github.com/zm2231/agent-hands/commit/42bf4869b4f51cdabe2f50475e345d39f4425cbf))
+* **desktop:** show each app's usage instructions once per 10 minutes ([#30](https://github.com/zm2231/agent-hands/issues/30)) ([c0a85c5](https://github.com/zm2231/agent-hands/commit/c0a85c52c0189f61859976772a868ae898a6e495))
+
 ## [0.5.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.5.0...agent-hands-v0.5.1) (2026-09-26)
 
 
