@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.5.0...agent-hands-v0.5.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **desktop:** reduce token cost of desktop responses ([#22](https://github.com/zm2231/agent-hands/issues/22)) ([d0382f9](https://github.com/zm2231/agent-hands/commit/d0382f9cf8c87b09928d76385f043370b87c3525))
+
 ## [0.5.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.4.1...agent-hands-v0.5.0) (2026-09-21)
 
 
