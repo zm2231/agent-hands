@@ -1,6 +1,6 @@
 const FIELDS = ["Description", "Help", "Value", "ID", "Secondary Actions", "Details", "URL"];
 const FIELD_RE = new RegExp(`(^|, | )(${FIELDS.join("|")}): `, "g");
-const ROLE_PREFIX_RE = /^[a-z]+(?: [a-z]+)*(?: \([^)]*\))?$/;
+const ROLE_PREFIX_RE = /^(?:[a-z]+(?: [a-z]+)*|[A-Za-z]+)(?: \([^)]*\))?$/;
 const FLAGS = new Set(["disabled", "settable", "selectable", "selected", "expanded", "collapsed", "float", "boolean"]);
 const ROLES = [
   "button", "toggle button", "radio button", "check box", "pop up button", "menu button", "sort button",
@@ -21,7 +21,7 @@ export const COMPACT_BUDGET = 5000;
 const SUMMARY_CHARS = 100;
 const ELEMENT_RE = /^([+~])?(\t*)(\d+) (.*)$/;
 const DIFF_RE = /^(The following is a (cumulative )?diff from|There has been no change in the accessibility tree)/;
-const TRAILER_RE = /^(Selected:$|The focused UI element is |Note: Pay special attention)/;
+const TRAILER_RE = /^(Selected:$|The focused UI element is |Note: )/;
 
 export interface AxNode {
   change?: "+" | "~";
