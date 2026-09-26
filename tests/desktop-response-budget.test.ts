@@ -371,3 +371,62 @@ describe("compact view", () => {
     expect(second).toBe(BIG);
   });
 });
+
+describe("app instructions", () => {
+  beforeEach(() => {
+    brokerDispatch.mockReset();
+  });
+
+  const withInstructions = (body: string) =>
+    ["<app_specific_instructions>", "## Test Computer Use", body, "</app_specific_instructions>", TREE].join("\n");
+  const POINTER = "[Test Computer Use: app instructions shown under a minute ago; pass instructions: true to include them again]";
+
+  it("shows app instructions once, then a pointer, and again on request", async () => {
+    const text = withInstructions("Use the toolbar.");
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text }]));
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const read = async (extra: Record<string, unknown> = {}) => ((await executePipeline("get_app_state", { app: "Test", ...extra }, ctx())).content[0] as any).text;
+    expect(await read()).toBe(text);
+    expect(await read()).toBe(`${POINTER}\n${TREE}`);
+    expect(await read({ instructions: true })).toBe(text);
+    expect(brokerDispatch.mock.calls[2][2]).toEqual({ app: "com.test.app" });
+  });
+
+  it("applies the same rule inside a batch", async () => {
+    const text = withInstructions("Use the menu bar.");
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text }], [
+      { content: [{ type: "text", text }], isError: false },
+      { content: [{ type: "text", text }], isError: false },
+    ]));
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executeBatchPipeline("Test", [
+      { method: "get_app_state" },
+      { method: "get_app_state" },
+      { method: "get_app_state", instructions: true },
+    ], false, ctx());
+    expect((result.content[0] as any).text).toBe([`#1 get_app_state\n${text}`, `#2 get_app_state\n${POINTER}\n${TREE}`, `#3 get_app_state\n${text}`].join("\n"));
+    expect(brokerDispatch.mock.calls[0][3].followUpCalls[1].arguments).toEqual({ app: "com.test.app" });
+  });
+
+  it("keeps showing instructions whose batch output was omitted for size", async () => {
+    const text = withInstructions("Use the dock.");
+    const huge = `${text}\n${"x".repeat(26 * 1024 * 1024)}`;
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: huge }], [{ content: [{ type: "text", text }], isError: false }]));
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executeBatchPipeline("Test", [{ method: "get_app_state" }, { method: "get_app_state" }], false, ctx());
+    const out = (result.content[0] as any).text as string;
+    expect(out).toContain("#1 get_app_state: output omitted (response size limit)");
+    expect(out).toContain(`#2 get_app_state\n${text}`);
+  });
+
+  it.each([
+    ["click", { element_index: "1", instructions: true }, "click does not accept instructions."],
+    ["get_app_state", { find: "x", instructions: true }, "Pass find or instructions, not both."],
+    ["get_app_state", { find: "x", instructions: false }, "Pass find or instructions, not both."],
+    ["get_app_state", { instructions: "yes" }, "instructions must be a boolean."],
+  ])("rejects %s %o before dispatch", async (method, extra, message) => {
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    expect(await executePipeline(method, { app: "Test", ...extra }, ctx())).toEqual({ content: [{ type: "text", text: message }], isError: true });
+    expect(brokerDispatch).not.toHaveBeenCalled();
+  });
+});

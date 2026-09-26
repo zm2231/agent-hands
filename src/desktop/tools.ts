@@ -55,6 +55,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
         screenshot: SCREENSHOT_PROP,
         find: { type: "string", description: "Return only elements whose name, description, value, ID, or help text contains this text, each with its parent path." },
         full: { type: "boolean", description: "Return every element instead of the compact view. Long values are still shortened." },
+        instructions: { type: "boolean", description: "Include the app's usage instructions even if they were shown in the last 10 minutes." },
       },
       required: ["app"],
       additionalProperties: false,

@@ -11,6 +11,7 @@ import { brokerDispatch, type Resolver } from "./broker/dispatch.js";
 import { describe, findInTree, parseTarget, resolveTarget } from "./ax-tree.js";
 
 import { sanitizeError } from "../kernel/sanitize.js";
+import { presentInstructions } from "./app-instructions.js";
 import { presentTree, trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
 import { DESKTOP_TOOLS } from "./tools.js";
 import { validateArgs } from "../kernel/validate.js";
@@ -31,18 +32,21 @@ function images(content: ContentBlock[]): ContentBlock[] {
 interface StateView {
   find?: string;
   full: boolean;
+  instructions: boolean;
 }
 
 function checkView(method: string, args: Record<string, unknown>): StateView {
   const find = args.find;
   const full = args.full;
-  if ((find !== undefined || full !== undefined) && method !== "get_app_state") {
-    throw new Error(`${method} does not accept ${find !== undefined ? "find" : "full"}.`);
-  }
+  const instructions = args.instructions;
+  const given = ([["find", find], ["full", full], ["instructions", instructions]] as const).find(([, v]) => v !== undefined);
+  if (given && method !== "get_app_state") throw new Error(`${method} does not accept ${given[0]}.`);
   if (find !== undefined && (typeof find !== "string" || !find.trim())) throw new Error("find must be a non-empty string.");
   if (full !== undefined && typeof full !== "boolean") throw new Error("full must be a boolean.");
+  if (instructions !== undefined && typeof instructions !== "boolean") throw new Error("instructions must be a boolean.");
   if (find !== undefined && full === true) throw new Error("Pass find or full, not both.");
-  return { find: find as string | undefined, full: full === true };
+  if (find !== undefined && instructions !== undefined) throw new Error("Pass find or instructions, not both.");
+  return { find: find as string | undefined, full: full === true, instructions: instructions === true };
 }
 
 export function targetResolver(method: string, args: Record<string, unknown>): Resolver | undefined {
@@ -133,6 +137,7 @@ export async function executePipeline(
     delete cleanArgs.screenshot;
     delete cleanArgs.find;
     delete cleanArgs.full;
+    delete cleanArgs.instructions;
 
     const isMutation = method !== "list_apps" && method !== "get_app_state";
     const result = await brokerDispatch(components, method, cleanArgs, {
@@ -206,7 +211,17 @@ export async function executePipeline(
         await fh.close();
       } catch { tmpPath = undefined; }
     }
+    const shownInstructions: Array<() => void> = [];
+    if (!result.isError && bundleId) {
+      responseContent = responseContent.map((b) => {
+        if (b.type !== "text" || !b.text) return b;
+        const presented = presentInstructions(b.text, bundleId!, view.instructions);
+        shownInstructions.push(presented.markShown);
+        return { ...b, text: presented.text };
+      });
+    }
     responseContent = trimContentBlocks(responseContent as any, tmpPath, compact) as ContentBlock[];
+    for (const markShown of shownInstructions) markShown();
 
     return { content: responseContent, isError: result.isError };
   } catch (e: unknown) {
@@ -331,6 +346,7 @@ export async function executeBatchPipeline(
       delete args.screenshot;
       delete args.find;
       delete args.full;
+      delete args.instructions;
       if (a.method === "press_key" && typeof args.key === "string") {
         args.key = normalizeKey(args.key);
       }
@@ -342,7 +358,7 @@ export async function executeBatchPipeline(
     // The broker needs a get_app_state to establish CUA context; its output is not returned.
     const implicitActivation = normalized[0].method !== "get_app_state";
     if (implicitActivation) {
-      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined, full: false });
+      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined, full: false, instructions: false });
     }
     const [primary, ...rest] = normalized;
 
@@ -389,7 +405,7 @@ export async function executeBatchPipeline(
       unrelatedFocusChanges: telemetry.unrelatedFocusChanges,
     });
 
-    return { content: renderBatch(executed, implicitActivation, actions.length), isError: anyError };
+    return { content: renderBatch(executed, implicitActivation, actions.length, bundleId), isError: anyError };
   } catch (e: unknown) {
     if (focusFinish) {
       try { await focusFinish(); } catch { /* non-fatal */ }
@@ -430,9 +446,10 @@ interface ExecutedAction {
   note?: string;
   find?: string;
   full?: boolean;
+  instructions?: boolean;
 }
 
-export function renderBatch(executed: ExecutedAction[], implicitActivation: boolean, requested: number): ContentBlock[] {
+export function renderBatch(executed: ExecutedAction[], implicitActivation: boolean, requested: number, app: string): ContentBlock[] {
   const blocks: ContentBlock[] = [];
   let lines: string[] = [];
   let bytes = 0;
@@ -463,7 +480,13 @@ export function renderBatch(executed: ExecutedAction[], implicitActivation: bool
     if (r.isError) {
       fitted = emit(`${label}: error\n${text || "(no error text returned)"}`, images);
     } else if (r.method === "get_app_state") {
-      fitted = emit(`${label}\n${r.find ? findInTree(text, r.find) : presentTree(text, !r.full)}`, images);
+      if (r.find) {
+        fitted = emit(`${label}\n${findInTree(text, r.find)}`, images);
+      } else {
+        const presented = presentInstructions(text, app, r.instructions === true);
+        fitted = emit(`${label}\n${presentTree(presented.text, !r.full)}`, images);
+        if (fitted) presented.markShown();
+      }
     } else {
       fitted = emit(r.note ? `${label}: ok (${r.note})` : `${label}: ok`, images);
     }
