@@ -11,7 +11,7 @@ import { brokerDispatch, type Resolver } from "./broker/dispatch.js";
 import { describe, findInTree, parseTarget, resolveTarget } from "./ax-tree.js";
 
 import { sanitizeError } from "../kernel/sanitize.js";
-import { trimAxTree, trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
+import { presentTree, trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
 import { DESKTOP_TOOLS } from "./tools.js";
 import { validateArgs } from "../kernel/validate.js";
 import { tmpdir } from "node:os";
@@ -28,11 +28,21 @@ function images(content: ContentBlock[]): ContentBlock[] {
   return content.filter((b) => b.type === "image");
 }
 
-function checkFind(method: string, args: Record<string, unknown>): string | undefined {
-  if (args.find === undefined) return undefined;
-  if (method !== "get_app_state") throw new Error(`${method} does not accept find.`);
-  if (typeof args.find !== "string" || !args.find.trim()) throw new Error("find must be a non-empty string.");
-  return args.find;
+interface StateView {
+  find?: string;
+  full: boolean;
+}
+
+function checkView(method: string, args: Record<string, unknown>): StateView {
+  const find = args.find;
+  const full = args.full;
+  if ((find !== undefined || full !== undefined) && method !== "get_app_state") {
+    throw new Error(`${method} does not accept ${find !== undefined ? "find" : "full"}.`);
+  }
+  if (find !== undefined && (typeof find !== "string" || !find.trim())) throw new Error("find must be a non-empty string.");
+  if (full !== undefined && typeof full !== "boolean") throw new Error("full must be a boolean.");
+  if (find !== undefined && full === true) throw new Error("Pass find or full, not both.");
+  return { find: find as string | undefined, full: full === true };
 }
 
 export function targetResolver(method: string, args: Record<string, unknown>): Resolver | undefined {
@@ -74,10 +84,10 @@ export async function executePipeline(
     }
 
     let resolve: Resolver | undefined;
-    let find: string | undefined;
+    let view: StateView;
     try {
       resolve = targetResolver(method, args);
-      find = checkFind(method, args);
+      view = checkView(method, args);
     } catch (e) {
       outcome = "invalid_arguments";
       throw e;
@@ -122,6 +132,7 @@ export async function executePipeline(
     const cleanArgs = { ...args };
     delete cleanArgs.screenshot;
     delete cleanArgs.find;
+    delete cleanArgs.full;
 
     const isMutation = method !== "list_apps" && method !== "get_app_state";
     const result = await brokerDispatch(components, method, cleanArgs, {
@@ -170,9 +181,10 @@ export async function executePipeline(
     let responseContent = result.content;
     if (!result.isError && result.note) {
       responseContent = [{ type: "text", text: `${method}: ok (${result.note})` }, ...images(result.content)];
-    } else if (!result.isError && find) {
-      responseContent = [{ type: "text", text: findInTree(stateText(result.content), find) }, ...images(result.content)];
+    } else if (!result.isError && view.find) {
+      responseContent = [{ type: "text", text: findInTree(stateText(result.content), view.find) }, ...images(result.content)];
     }
+    const compact = method === "get_app_state" && !result.isError && !view.find && !view.full;
 
     // Trim large AX trees: cap element text values, save full to tmp if needed.
     const hasLargeText = responseContent.some(
@@ -194,7 +206,7 @@ export async function executePipeline(
         await fh.close();
       } catch { tmpPath = undefined; }
     }
-    responseContent = trimContentBlocks(responseContent as any, tmpPath) as ContentBlock[];
+    responseContent = trimContentBlocks(responseContent as any, tmpPath, compact) as ContentBlock[];
 
     return { content: responseContent, isError: result.isError };
   } catch (e: unknown) {
@@ -286,7 +298,7 @@ export async function executeBatchPipeline(
       const err = validateArgs({ ...actionArgs, app }, schema);
       if (err) throw new Error(`Batch action #${i + 1} (${a.method}): ${err}`);
       try {
-        return { resolve: targetResolver(a.method, actionArgs), find: checkFind(a.method, actionArgs) };
+        return { resolve: targetResolver(a.method, actionArgs), ...checkView(a.method, actionArgs) };
       } catch (e) {
         throw new Error(`Batch action #${i + 1} (${a.method}): ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -318,6 +330,7 @@ export async function executeBatchPipeline(
       delete args.method;
       delete args.screenshot;
       delete args.find;
+      delete args.full;
       if (a.method === "press_key" && typeof args.key === "string") {
         args.key = normalizeKey(args.key);
       }
@@ -329,7 +342,7 @@ export async function executeBatchPipeline(
     // The broker needs a get_app_state to establish CUA context; its output is not returned.
     const implicitActivation = normalized[0].method !== "get_app_state";
     if (implicitActivation) {
-      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined });
+      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined, full: false });
     }
     const [primary, ...rest] = normalized;
 
@@ -416,6 +429,7 @@ interface ExecutedAction {
   isError: boolean;
   note?: string;
   find?: string;
+  full?: boolean;
 }
 
 export function renderBatch(executed: ExecutedAction[], implicitActivation: boolean, requested: number): ContentBlock[] {
@@ -449,7 +463,7 @@ export function renderBatch(executed: ExecutedAction[], implicitActivation: bool
     if (r.isError) {
       fitted = emit(`${label}: error\n${text || "(no error text returned)"}`, images);
     } else if (r.method === "get_app_state") {
-      fitted = emit(`${label}\n${r.find ? findInTree(text, r.find) : trimAxTree(text).text}`, images);
+      fitted = emit(`${label}\n${r.find ? findInTree(text, r.find) : presentTree(text, !r.full)}`, images);
     } else {
       fitted = emit(r.note ? `${label}: ok (${r.note})` : `${label}: ok`, images);
     }

@@ -82,9 +82,11 @@ No ChatGPT subscription required at runtime. agent-hands uses the signed Codex C
 
 Mutation tools return the app's accessibility tree after the action. Pass `screenshot: true` to any state-returning tool to include a screenshot; it is left out by default to save context.
 
-`click`, `set_value`, `select_text`, `scroll`, and `perform_secondary_action` accept `target` in place of `element_index`: `{ "role": "toggle button", "name": "Bold" }`. The server reads the app state itself, acts on the single matching element, and returns a one-line receipt instead of the tree, so no `get_app_state` call is needed first. `name` matches an element's name, description, value, or ID; matching is exact unless `match` is `"contains"`. If no element or several elements match, nothing happens and the response lists candidates.
+`click`, `set_value`, `select_text`, `scroll`, and `perform_secondary_action` accept `target` in place of `element_index`: `{ "role": "toggle button", "name": "Bold" }`. The server reads the app state itself, acts on the single matching element, and returns a one-line receipt instead of the tree, so no `get_app_state` call is needed first. `name` matches an element's name, description, value, or ID; matching is exact unless `match` is `"contains"`. If no element or several elements match, nothing happens and the response lists candidates. While an app's content keeps changing, Computer Use may return only the elements that changed since an earlier read; a target is never resolved against such a partial tree, so use `element_index` instead.
 
 `get_app_state` accepts `find` to return only elements whose name, description, value, ID, or help text contains the given text, each with its parent path, instead of the full tree.
+
+Long values in the tree are shortened to 200 characters. A `get_app_state` tree still over 8,000 characters comes back compact: elements are kept breadth-first up to about 5,000 characters, and each hidden region is replaced by a `… N more: names` line. `find` and `target` always search the complete tree, and `full: true` returns every element.
 
 `desktop_batch` lets you send up to 20 same-app actions in a single call. One connection, sequential execution, roughly a second saved per action in round-trip overhead. Mutations report `ok` or their error; add a `get_app_state` action where you want the state returned. Each action that uses `target` is resolved against state read immediately before it runs, so earlier actions that change the UI do not leave it acting on stale indexes.
 

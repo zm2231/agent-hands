@@ -313,3 +313,61 @@ describe("targets and find", () => {
     expect(brokerDispatch).not.toHaveBeenCalled();
   });
 });
+
+describe("compact view", () => {
+  beforeEach(() => {
+    brokerDispatch.mockReset();
+  });
+
+  const BIG = ["<app_state>", "0 standard window Doc", "\t1 group Items", ...Array.from({ length: 500 }, (_, i) => `\t\t${i + 2} button Item ${i}`), "</app_state>"].join("\n");
+
+  it("returns large trees compact by default and complete with full", async () => {
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: BIG }]));
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const compact = (await executePipeline("get_app_state", { app: "Test" }, ctx())).content[0] as any;
+    expect(compact.text).toMatch(/^\[AX tree trimmed: \d+ -> \d+ chars\. \d+ of 502 elements shown;/);
+    expect(compact.text.length).toBeLessThan(5600);
+    expect(compact.text).toMatch(/\t\t… \d+ more: Item \d+, /);
+    const full = (await executePipeline("get_app_state", { app: "Test", full: true }, ctx())).content[0] as any;
+    expect(full.text).toBe(BIG);
+    expect(brokerDispatch.mock.calls[1][2]).toEqual({ app: "com.test.app" });
+  });
+
+  it("saves trees over the file threshold in full and names the file in the compact header", async () => {
+    const huge = ["<app_state>", "0 standard window Doc", "\t1 group Items", ...Array.from({ length: 4000 }, (_, i) => `\t\t${i + 2} button Item ${i}`), "</app_state>"].join("\n");
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: huge }]));
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const text = ((await executePipeline("get_app_state", { app: "Test" }, ctx())).content[0] as any).text as string;
+    const path = /Full tree saved to (\S+)\]/.exec(text)![1];
+    expect(text).toMatch(/elements shown;/);
+    const { readFile } = await import("node:fs/promises");
+    expect(await readFile(path, "utf8")).toBe(huge);
+  });
+
+  it("leaves small trees unchanged", async () => {
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: TREE }]));
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    expect((await executePipeline("get_app_state", { app: "Test" }, ctx())).content).toEqual([{ type: "text", text: TREE }]);
+  });
+
+  it.each([
+    ["get_app_state", { find: "x", full: true }, "Pass find or full, not both."],
+    ["get_app_state", { full: "yes" }, "full must be a boolean."],
+    ["click", { element_index: "1", full: true }, "click does not accept full."],
+  ])("rejects %s %o before dispatch", async (method, extra, message) => {
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executePipeline(method, { app: "Test", ...extra }, ctx());
+    expect(result).toEqual({ content: [{ type: "text", text: message }], isError: true });
+    expect(brokerDispatch).not.toHaveBeenCalled();
+  });
+
+  it("applies the compact view per batch action unless full is set", async () => {
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: BIG }], [{ content: [{ type: "text", text: BIG }], isError: false }]));
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executeBatchPipeline("Test", [{ method: "get_app_state" }, { method: "get_app_state", full: true }], false, ctx());
+    expect(brokerDispatch.mock.calls[0][3].followUpCalls[0].arguments).toEqual({ app: "com.test.app" });
+    const [first, second] = ((result.content[0] as any).text as string).split("\n#2 get_app_state\n");
+    expect(first).toMatch(/^#1 get_app_state\n\[AX tree trimmed: .* of 502 elements shown;/);
+    expect(second).toBe(BIG);
+  });
+});

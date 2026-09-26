@@ -46,14 +46,15 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   {
     name: "get_app_state",
     description:
-      "Get the accessibility tree of an app, plus a screenshot when requested. Use find to return only matching elements. " +
-      "Not needed before actions that use target.",
+      "Get the accessibility tree of an app, plus a screenshot when requested. Large trees come back compact, with hidden elements named " +
+      "in \"… N more\" lines; use find to return only matching elements, or full for everything. Not needed before actions that use target.",
     inputSchema: {
       type: "object",
       properties: {
         app: { type: "string", description: APP_DESC },
         screenshot: SCREENSHOT_PROP,
         find: { type: "string", description: "Return only elements whose name, description, value, ID, or help text contains this text, each with its parent path." },
+        full: { type: "boolean", description: "Return every element instead of the compact view. Long values are still shortened." },
       },
       required: ["app"],
       additionalProperties: false,
