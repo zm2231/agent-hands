@@ -70,7 +70,7 @@ No ChatGPT subscription required at runtime. agent-hands uses the signed Codex C
 | Tool | What it does |
 |---|---|
 | `list_apps` | List running macOS apps |
-| `get_app_state` | Screenshot + accessibility tree of an app |
+| `get_app_state` | Accessibility tree of an app |
 | `click` | Click an element or coordinate |
 | `type_text` | Type text into an app |
 | `press_key` | Press a key combo (`cmd+c`, `Return`, etc.) |
@@ -80,9 +80,9 @@ No ChatGPT subscription required at runtime. agent-hands uses the signed Codex C
 | `drag` | Drag between two points |
 | `perform_secondary_action` | Right-click, expand, and other secondary actions |
 
-All mutation tools accept `observe: true` to get a fresh screenshot and accessibility tree back after the action completes. One call instead of two.
+Mutation tools return the app's accessibility tree after the action. Pass `screenshot: true` to any state-returning tool to include a screenshot; it is left out by default to save context.
 
-`desktop_batch` lets you send up to 20 same-app actions in a single call. One connection, sequential execution, roughly a second saved per action in round-trip overhead.
+`desktop_batch` lets you send up to 20 same-app actions in a single call. One connection, sequential execution, roughly a second saved per action in round-trip overhead. Mutations report `ok` or their error; add a `get_app_state` action where you want the state returned.
 
 ## Browser actions
 
