@@ -88,6 +88,8 @@ Mutation tools return the app's accessibility tree after the action. Pass `scree
 
 Long values in the tree are shortened to 200 characters. A `get_app_state` tree still over 8,000 characters comes back compact: elements are kept breadth-first up to about 5,000 characters, and each hidden region is replaced by a `… N more: names` line. `find` and `target` always search the complete tree, and `full: true` returns every element.
 
+Some apps come with usage instructions from Computer Use (Chrome, Notion, Slack, Spotify, and others). Computer Use sends them with the first state of each connection, and agent-hands reconnects after 30 seconds idle, so they would otherwise repeat after every pause. They are included the first time an app's state is returned, again when they change or after 10 minutes, and otherwise replaced by a one-line pointer; pass `instructions: true` to `get_app_state` to include the most recent copy.
+
 `desktop_batch` lets you send up to 20 same-app actions in a single call. One connection, sequential execution, roughly a second saved per action in round-trip overhead. Mutations report `ok` or their error; add a `get_app_state` action where you want the state returned. Each action that uses `target` is resolved against state read immediately before it runs, so earlier actions that change the UI do not leave it acting on stale indexes.
 
 ## Browser actions
