@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findInTree, parseAxTree, parseTarget, resolveTarget } from "../src/desktop/ax-tree.js";
+import { compactTree, findInTree, parseAxTree, parseTarget, readAxTree, resolveTarget } from "../src/desktop/ax-tree.js";
 
 const TREE = [
   "Computer Use state (CUA App Version: 1)",
@@ -127,6 +127,113 @@ describe("line grammar", () => {
   });
 });
 
+describe("state regions", () => {
+  const STATE = [
+    "Computer Use state (CUA App Version: 1)",
+    "<app_specific_instructions>",
+    "Prefer 3 tabs over 1 window.",
+    "</app_specific_instructions>",
+    "<app_state>",
+    "App=/Applications/Test.app/ (bundleID com.test.app, pid 1)",
+    "0 standard window W",
+    "\t1 Description: Categories, Help: Pick one",
+    "\t2 HTML content (settable) Description: message body, URL: about:blank",
+    "\t3 row (selected) Inbox",
+    "",
+    "Selected:",
+    "\t3 row (selected) Inbox",
+    "",
+    "Note: Pay special attention to the content selected by the user.",
+    "The focused UI element is 2 HTML content (settable) Description: message body",
+    "</app_state>",
+  ].join("\n");
+
+  it("separates instructions, elements, and trailing notes without duplicating selected elements", () => {
+    const tree = readAxTree(STATE);
+    expect(tree.nodes.map((n) => n.index)).toEqual(["0", "1", "2", "3"]);
+    expect(tree.header.at(-1)).toBe("App=/Applications/Test.app/ (bundleID com.test.app, pid 1)");
+    expect(tree.trailer.slice(0, 2)).toEqual(["", "Selected:"]);
+    expect(tree.nodes[3].fields).toEqual({});
+    expect(tree.diff).toBe(false);
+    expect([...tree.header, ...tree.nodes.map((n) => `${"\t".repeat(n.depth)}${n.index} ${n.line}`), ...tree.trailer].join("\n")).toBe(STATE);
+  });
+
+  it("reads fields on elements with no role and after capitalized roles", () => {
+    const [, noRole, html] = parseAxTree(STATE);
+    expect(noRole.fields).toEqual({ Description: "Categories", Help: "Pick one" });
+    expect(html.fields).toEqual({ Description: "message body", URL: "about:blank" });
+    expect(resolveTarget(STATE, parseTarget({ name: "Inbox" }))).toMatchObject({ node: { index: "3" } });
+    expect(resolveTarget(STATE, parseTarget({ name: "message body" }))).toMatchObject({ node: { index: "2" } });
+  });
+
+  it("reads trailer-like lines inside a value as value text when later elements follow", () => {
+    const text = [
+      "<app_state>",
+      "0 standard window W",
+      "\t1 text entry area Value: notes",
+      "",
+      "Selected:",
+      "Note: Pay special attention to this line",
+      "The focused UI element is not a real note",
+      "\t2 button Reachable",
+      "",
+      "Selected:",
+      "\t2 button Reachable",
+      "The focused UI element is 2 button Reachable",
+      "</app_state>",
+    ].join("\n");
+    const tree = readAxTree(text);
+    expect(tree.nodes.map((n) => n.index)).toEqual(["0", "1", "2"]);
+    expect(tree.nodes[1].line).toContain("Note: Pay special attention to this line");
+    expect(tree.trailer).toEqual(["", "Selected:", "\t2 button Reachable", "The focused UI element is 2 button Reachable", "</app_state>"]);
+    expect(resolveTarget(text, parseTarget({ name: "Reachable" }))).toMatchObject({ node: { index: "2" } });
+    expect(findInTree(text, "reachable").split("\n")[0]).toBe('find "reachable": 1 of 3 elements');
+    const compact = compactTree(text, 50, 0)!.text.split("\n");
+    expect(compact.slice(0, 5)).toEqual(["<app_state>", "0 standard window W", "\t2 button Reachable", "\t… 1 more", ""]);
+  });
+
+  it("treats an element listed only after a Selected: line as a real element", () => {
+    const text = ["<app_state>", "0 standard window W", "", "Selected:", "\t1 row Only Here", "</app_state>"].join("\n");
+    const tree = readAxTree(text);
+    expect(tree.nodes.map((n) => n.index)).toEqual(["0", "1"]);
+    expect([...tree.header, ...tree.nodes.map((n) => `${"\t".repeat(n.depth)}${n.index} ${n.line}`), ...tree.trailer].join("\n")).toBe(text);
+  });
+
+  it("finds the trailer in linear time when values repeat marker lines", () => {
+    const lines = ["<app_state>", "0 text entry area Value: start", ...Array.from({ length: 100_000 }, () => "Selected:"), "\t1 button End", "</app_state>"];
+    const started = performance.now();
+    const tree = readAxTree(lines.join("\n"));
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(tree.nodes.map((n) => n.index)).toEqual(["0", "1"]);
+  });
+
+  const DIFF = [
+    "Computer Use state (CUA App Version: 1)",
+    "<app_state>",
+    "App=/Applications/Test.app/ (bundleID com.test.app, pid 1)",
+    "The following is a diff from the previous accessibility tree for Window: \"W\" with ~ and + representing changed and added elements, respectively.",
+    "Removed element IDs: 4-6",
+    "~\t\t7 button Save",
+    "+\t\t9 button Save As",
+    "</app_state>",
+  ].join("\n");
+
+  it("parses diff lines but refuses to resolve targets against a diff", () => {
+    const tree = readAxTree(DIFF);
+    expect(tree.diff).toBe(true);
+    expect(tree.nodes.map((n) => [n.change, n.index, n.head])).toEqual([["~", "7", "button Save"], ["+", "9", "button Save As"]]);
+    expect(resolveTarget(DIFF, parseTarget({ name: "Save" }))).toEqual({ error: expect.stringMatching(/^The app returned only the elements that changed/) });
+  });
+
+  it("labels find results from a diff as changed elements only", () => {
+    expect(findInTree(DIFF, "save").split("\n")[0]).toBe('find "save": 2 of 2 changed elements (the app returned only what changed since an earlier read)');
+  });
+
+  it("never compacts a diff", () => {
+    expect(compactTree(DIFF, 10, 0)).toBeNull();
+  });
+});
+
 describe("parseTarget", () => {
   it.each([
     [null, "target must be an object with a name."],
@@ -164,5 +271,85 @@ describe("findInTree", () => {
 
   it("reports no matches", () => {
     expect(findInTree(TREE, "nothing here")).toBe('find "nothing here": 0 of 15 elements');
+  });
+});
+
+describe("compactTree", () => {
+  const RIBBON = [
+    "Computer Use state (CUA App Version: 1)",
+    "<app_state>",
+    "App=/Applications/Test.app/ (bundleID com.test.app, pid 1)",
+    "0 standard window W",
+    "\t1 container Ribbon",
+    "\t\t2 button Paste",
+    "\t\t3 button Cut",
+    "\t\t4 container",
+    "\t\t\t5 button Bold",
+    "\t\t\t6 text entry area Value: first line",
+    "second line",
+    "\t7 button Save",
+    "</app_state>",
+  ].join("\n");
+
+  it("leaves trees at or under the threshold unchanged", () => {
+    expect(compactTree(RIBBON, 60, RIBBON.length)).toBeNull();
+  });
+
+  it("keeps elements breadth-first within the budget and names hidden ones", () => {
+    expect(compactTree(RIBBON, 85, 0)).toEqual({
+      shown: 3,
+      total: 8,
+      text: [
+        "Computer Use state (CUA App Version: 1)",
+        "<app_state>",
+        "App=/Applications/Test.app/ (bundleID com.test.app, pid 1)",
+        "0 standard window W",
+        "\t1 container Ribbon",
+        "\t\t… 5 more: Paste, Cut, Bold",
+        "\t7 button Save",
+        "</app_state>",
+      ].join("\n"),
+    });
+  });
+
+  it("keeps multi-line values of shown elements intact", () => {
+    const text = ["0 standard window W", "\t1 text entry area Value: first line", "second line", "\t2 group", "\t\t3 button Deep"].join("\n");
+    expect(compactTree(text, 90, 0)).toEqual({
+      text: ["0 standard window W", "\t1 text entry area Value: first line", "second line", "\t… 2 more: Deep"].join("\n"),
+      shown: 2,
+      total: 4,
+    });
+  });
+
+  it("keeps instructions and trailing notes when compacting", () => {
+    const text = ["<app_state>", "App=x", "0 standard window W", "\t1 group", "\t\t2 button Deep", "The focused UI element is 2 button Deep", "</app_state>"].join("\n");
+    expect(compactTree(text, 40, 0)!.text).toBe(
+      ["<app_state>", "App=x", "0 standard window W", "\t… 2 more: Deep", "The focused UI element is 2 button Deep", "</app_state>"].join("\n"),
+    );
+  });
+
+  it("caps the names listed per hidden region", () => {
+    const many = ["0 standard window W", "\t1 group", ...Array.from({ length: 30 }, (_, i) => `\t\t${i + 2} button Button number ${i}`)].join("\n");
+    expect(compactTree(many, 150, 0)!.text.split("\n").pop()).toBe(
+      "\t\t… 30 more: Button number 0, Button number 1, Button number 2, Button number 3, Button number 4, Button number 5, …",
+    );
+  });
+
+  it("counts summary lines against the budget", () => {
+    const groups = Array.from({ length: 80 }, (_, g) => [`\t${g * 6 + 1} group Section ${g}`, ...Array.from({ length: 5 }, (_, i) => `\t\t${g * 6 + i + 2} button Action ${g}-${i}`)]).flat();
+    const text = ["<app_state>", "0 standard window W", ...groups, "</app_state>"].join("\n");
+    const out = compactTree(text, 2000, 0)!;
+    const body = out.text.split("\n").slice(1, -1).join("\n");
+    expect(body.length).toBeLessThanOrEqual(2000);
+    expect(out.shown).toBeGreaterThan(1);
+  });
+
+  it("compacts very wide trees without deep recursion or spreading children", () => {
+    const text = ["<app_state>", "0 standard window W", ...Array.from({ length: 200_000 }, (_, i) => `\t${i + 1} button B${i}`), "</app_state>"].join("\n");
+    const started = performance.now();
+    const out = compactTree(text)!;
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(out.total).toBe(200_001);
+    expect(out.text.split("\n").slice(1, -1).join("\n").length).toBeLessThanOrEqual(5000);
   });
 });
