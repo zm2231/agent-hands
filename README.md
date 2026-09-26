@@ -70,7 +70,7 @@ No ChatGPT subscription required at runtime. agent-hands uses the signed Codex C
 | Tool | What it does |
 |---|---|
 | `list_apps` | List running macOS apps |
-| `get_app_state` | Accessibility tree of an app |
+| `get_app_state` | Accessibility tree of an app, compact by default |
 | `click` | Click an element or coordinate |
 | `type_text` | Type text into an app |
 | `press_key` | Press a key combo (`cmd+c`, `Return`, etc.) |
@@ -79,18 +79,36 @@ No ChatGPT subscription required at runtime. agent-hands uses the signed Codex C
 | `scroll` | Scroll within an app |
 | `drag` | Drag between two points |
 | `perform_secondary_action` | Right-click, expand, and other secondary actions |
+| `desktop_batch` | Up to 20 of the actions above against one app in a single call |
 
-Mutation tools return the app's accessibility tree after the action. Pass `screenshot: true` to any state-returning tool to include a screenshot; it is left out by default to save context.
+Mutation tools called with `element_index` or coordinates return the app's accessibility tree after the action, in the same compact form as `get_app_state`. Pass `screenshot: true` to any state-returning tool to include a screenshot; it is left out by default to save context.
 
 `click`, `set_value`, `select_text`, `scroll`, and `perform_secondary_action` accept `target` in place of `element_index`: `{ "role": "toggle button", "name": "Bold" }`. The server reads the app state itself, acts on the single matching element, and returns a one-line receipt instead of the tree, so no `get_app_state` call is needed first. `name` matches an element's name, description, value, or ID; matching is exact unless `match` is `"contains"`. If no element or several elements match, nothing happens and the response lists candidates. While an app's content keeps changing, Computer Use may return only the elements that changed since an earlier read; a target is never resolved against such a partial tree, so use `element_index` instead.
 
 `get_app_state` accepts `find` to return only elements whose name, description, value, ID, or help text contains the given text, each with its parent path, instead of the full tree.
 
-Long values in the tree are shortened to 200 characters. A `get_app_state` tree still over 8,000 characters comes back compact: elements are kept breadth-first up to about 5,000 characters, and each hidden region is replaced by a `… N more: names` line. `find` and `target` always search the complete tree, and `full: true` returns every element.
+Long values in the tree are shortened to 200 characters. A tree still over 8,000 characters comes back compact: elements are kept breadth-first up to about 5,000 characters, and each hidden region is replaced by a `… N more: names` line. `find` and `target` always search the complete tree, and `full: true` returns every element.
 
 Some apps come with usage instructions from Computer Use (Chrome, Notion, Slack, Spotify, and others). Computer Use sends them with the first state of each connection, and agent-hands reconnects after 30 seconds idle, so they would otherwise repeat after every pause. They are included the first time an app's state is returned, again when they change or after 10 minutes, and otherwise replaced by a one-line pointer; pass `instructions: true` to `get_app_state` to include the most recent copy.
 
 `desktop_batch` lets you send up to 20 same-app actions in a single call. One connection, sequential execution, roughly a second saved per action in round-trip overhead. Mutations report `ok` or their error; add a `get_app_state` action where you want the state returned. Each action that uses `target` is resolved against state read immediately before it runs, so earlier actions that change the UI do not leave it acting on stale indexes.
+
+### Context cost
+
+Estimated tokens for one `get_app_state` call, measured on real app states. Base Computer Use returns the whole tree and a screenshot on every call; agent-hands caps long values, compacts large trees, and leaves the screenshot out unless `screenshot: true` is passed. Text is counted at 3.5 characters per token, and screenshots at Claude's image rate for the window size.
+
+| App | Base Computer Use | agent-hands | Saved |
+|---|---|---|---|
+| Calculator | 1,009 | 509 | 50% |
+| Finder | 3,071 | 1,506 | 51% |
+| Chrome | 7,268 | 1,645 | 77% |
+| Word | 9,036 | 1,535 | 83% |
+| Slack | 10,622 | 1,991 | 81% |
+| Notion | 12,919 | 2,161 | 83% |
+| ChatGPT | 23,334 | 1,627 | 93% |
+| Spotify | 25,816 | 1,854 | 93% |
+
+Acting by `target` saves more, because no state is returned at all. Computing 7 + 1 in Calculator takes a state read and four clicks with base Computer Use, each returning the tree and a screenshot (about 5,500 tokens). As one `desktop_batch` of four target clicks and a `find` for the result, it returns about 120 tokens. `find "zoom"` in Word returns 5 of 171 elements in about 120 tokens instead of the full tree.
 
 ## Browser actions
 
