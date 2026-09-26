@@ -18,6 +18,19 @@ const ACTION_ANNOTATIONS: ToolAnnotations = {
 
 const APP_DESC = "App name, full app path, or unambiguous bundle identifier";
 const SCREENSHOT_PROP = { type: "boolean", description: "Include a screenshot with the returned app state. Defaults to false." };
+const TARGET_PROP = {
+  type: "object",
+  description:
+    "Act on the element with this label instead of element_index. The server reads the app state itself, so no get_app_state call is needed first. " +
+    "Nothing happens if no element or several elements match; the response lists candidates.",
+  properties: {
+    role: { type: "string", description: "Role as shown before the name in the accessibility tree, e.g. button, toggle button, row. Needed to match by name when the role is app-defined or not in English." },
+    name: { type: "string", description: "Element name, description, value, or ID." },
+    match: { type: "string", enum: ["exact", "contains"], description: "Defaults to exact." },
+  },
+  required: ["name"],
+  additionalProperties: false,
+};
 
 export const DESKTOP_TOOLS: ToolDefinition[] = [
   {
@@ -33,10 +46,15 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   {
     name: "get_app_state",
     description:
-      "Get the accessibility tree of an app, plus a screenshot when requested. This must be called once per assistant turn before interacting with the app.",
+      "Get the accessibility tree of an app, plus a screenshot when requested. Use find to return only matching elements. " +
+      "Not needed before actions that use target.",
     inputSchema: {
       type: "object",
-      properties: { app: { type: "string", description: APP_DESC }, screenshot: SCREENSHOT_PROP },
+      properties: {
+        app: { type: "string", description: APP_DESC },
+        screenshot: SCREENSHOT_PROP,
+        find: { type: "string", description: "Return only elements whose name, description, value, ID, or help text contains this text, each with its parent path." },
+      },
       required: ["app"],
       additionalProperties: false,
     },
@@ -55,6 +73,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
           description: "Number of clicks. Defaults to 1",
         },
         element_index: { type: "string", description: "Element index to click" },
+        target: TARGET_PROP,
         mouse_button: {
           type: "string",
           enum: ["left", "right", "middle"],
@@ -77,12 +96,13 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
         app: { type: "string", description: APP_DESC },
         screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
+        target: TARGET_PROP,
         action: {
           type: "string",
           description: "Secondary accessibility action name",
         },
       },
-      required: ["app", "element_index", "action"],
+      required: ["app", "action"],
       additionalProperties: false,
     },
     annotations: ACTION_ANNOTATIONS,
@@ -96,9 +116,10 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
         app: { type: "string", description: APP_DESC },
         screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
+        target: TARGET_PROP,
         value: { type: "string", description: "Value to set" },
       },
-      required: ["app", "element_index", "value"],
+      required: ["app", "value"],
       additionalProperties: false,
     },
     annotations: ACTION_ANNOTATIONS,
@@ -115,6 +136,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
         },
         screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
+        target: TARGET_PROP,
         text: {
           type: "string",
           description: "Target text as shown in the accessibility tree",
@@ -127,7 +149,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
         },
         suffix: { type: "string", description: "Text after the target (disambiguates)" },
       },
-      required: ["app", "element_index", "text"],
+      required: ["app", "text"],
       additionalProperties: false,
     },
     annotations: ACTION_ANNOTATIONS,
@@ -141,6 +163,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
         app: { type: "string", description: APP_DESC },
         screenshot: SCREENSHOT_PROP,
         element_index: { type: "string", description: "Element index" },
+        target: TARGET_PROP,
         direction: {
           type: "string",
           description: "Scroll direction: up, down, left, or right",
@@ -150,7 +173,7 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
           description: "Number of pages to scroll (supports fractions). Defaults to 1.",
         },
       },
-      required: ["app", "element_index", "direction"],
+      required: ["app", "direction"],
       additionalProperties: false,
     },
     annotations: ACTION_ANNOTATIONS,

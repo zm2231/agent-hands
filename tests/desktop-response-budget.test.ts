@@ -19,7 +19,7 @@ const state = () => [{ type: "text", text: TREE }, IMAGE];
 
 function brokerResult(content: any[], followUpResults: any[] = [], isError = false) {
   const keep = (blocks: any[], flag: boolean | undefined) => flag === false ? blocks.filter((b) => b.type !== "image") : blocks;
-  return (_components?: unknown, _method?: string, _args?: unknown, options: any = {}) => ({
+  return (_components: unknown, _method: string, _args: unknown, options: any) => ({
     content: keep(content, options.keepImages),
     isError,
     modelTurnsStarted: 0,
@@ -54,7 +54,9 @@ describe("desktop tool schemas", () => {
 });
 
 describe("single-call responses", () => {
-  beforeEach(() => brokerDispatch.mockReset());
+  beforeEach(() => {
+    brokerDispatch.mockReset();
+  });
 
   it.each(["get_app_state", "click"])("%s drops screenshots and metadata by default", async (method) => {
     brokerDispatch.mockImplementation(brokerResult(state()));
@@ -91,7 +93,9 @@ describe("single-call responses", () => {
 });
 
 describe("batch responses", () => {
-  beforeEach(() => brokerDispatch.mockReset());
+  beforeEach(() => {
+    brokerDispatch.mockReset();
+  });
 
   async function runBatch(actions: any[], continueOnError = false) {
     const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
@@ -230,5 +234,82 @@ describe("batch responses", () => {
     const content = renderBatch(executed, false, 2);
     expect(Buffer.byteLength(JSON.stringify({ content, isError: false }), "utf8")).toBeLessThanOrEqual(25 * 1024 * 1024);
     expect(content.map((b) => b.text).join("\n")).toContain("#1 get_app_state: output omitted (response size limit)");
+  });
+});
+
+describe("targets and find", () => {
+  beforeEach(() => {
+    brokerDispatch.mockReset();
+  });
+
+  const RIBBON = "<app_state>\n0 standard window Doc\n\t1 container Status Bar\n\t\t2 button Zoom Out\n\t\t3 button Zoom In\n\t4 toggle button Bold, Value: off\n</app_state>";
+
+  it("offers target on element tools without requiring element_index, and find on get_app_state", async () => {
+    const { DESKTOP_TOOLS } = await import("../src/desktop/tools.js");
+    for (const name of ["click", "set_value", "select_text", "scroll", "perform_secondary_action"]) {
+      const schema = DESKTOP_TOOLS.find((t) => t.name === name)!.inputSchema as any;
+      expect(schema.properties.target?.required, name).toEqual(["name"]);
+      expect(schema.required, name).not.toContain("element_index");
+    }
+    const state = DESKTOP_TOOLS.find((t) => t.name === "get_app_state")!.inputSchema as any;
+    expect(state.properties.find.type).toBe("string");
+  });
+
+  it("resolves a single-call target against the state the broker reads and returns a one-line receipt", async () => {
+    brokerDispatch.mockImplementation(async (_c: unknown, _m: string, args: any, options: any) => {
+      const resolved = options.resolve([{ type: "text", text: RIBBON }], args);
+      return { ...brokerResult([{ type: "text", text: "full tree after click" }, IMAGE])(_c, _m, resolved.args, options), note: resolved.note, forwarded: resolved.args };
+    });
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executePipeline("click", { app: "Test", target: { name: "Bold" } }, ctx());
+    expect(result.content).toEqual([{ type: "text", text: "click: ok (4 toggle button Bold, Value: off)" }]);
+    const forwarded = await brokerDispatch.mock.results[0].value;
+    expect(forwarded.forwarded).toEqual({ app: "com.test.app", element_index: "4" });
+  });
+
+  it("returns only matching elements for get_app_state find", async () => {
+    brokerDispatch.mockImplementation(brokerResult([{ type: "text", text: RIBBON }, IMAGE]));
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executePipeline("get_app_state", { app: "Test", find: "zoom" }, ctx());
+    expect(result.content).toEqual([{ type: "text", text: 'find "zoom": 2 of 5 elements\n2 button Zoom Out  [container Status Bar]\n3 button Zoom In  [container Status Bar]' }]);
+    expect(brokerDispatch.mock.calls[0][2]).toEqual({ app: "com.test.app" });
+  });
+
+  it.each([
+    ["click", { target: { name: "Bold" }, element_index: "4" }, "Pass target or element_index/coordinates, not both."],
+    ["click", { target: { name: "Bold" }, x: 1, y: 2 }, "Pass target or element_index/coordinates, not both."],
+    ["scroll", { direction: "down" }, "scroll needs element_index or target."],
+    ["click", { target: { name: "Bold", fuzzy: true } }, "Unknown target field(s): fuzzy"],
+    ["get_app_state", { find: "  " }, "find must be a non-empty string."],
+  ])("rejects %s %o before dispatch", async (method, extra, message) => {
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executePipeline(method, { app: "Test", ...extra }, ctx());
+    expect(result).toEqual({ content: [{ type: "text", text: message }], isError: true });
+    expect(brokerDispatch).not.toHaveBeenCalled();
+  });
+
+  it("passes batch target resolvers per action and renders receipts and find results", async () => {
+    brokerDispatch.mockImplementation(brokerResult(state(), [
+      { content: state(), isError: false, note: "4 toggle button Bold, Value: off" },
+      { content: [{ type: "text", text: RIBBON }], isError: false },
+    ]));
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executeBatchPipeline("Test", [
+      { method: "click", target: { name: "Bold" } },
+      { method: "get_app_state", find: "zoom in" },
+    ], false, ctx());
+    const followUps = brokerDispatch.mock.calls[0][3].followUpCalls;
+    expect(typeof followUps[0].resolve).toBe("function");
+    expect(followUps[0].arguments).toEqual({ app: "com.test.app", target: { name: "Bold" } });
+    expect(followUps[1].resolve).toBeUndefined();
+    expect(followUps[1].arguments).toEqual({ app: "com.test.app" });
+    expect(result.content).toEqual([{ type: "text", text: '#1 click: ok (4 toggle button Bold, Value: off)\n#2 get_app_state\nfind "zoom in": 1 of 5 elements\n3 button Zoom In  [container Status Bar]' }]);
+  });
+
+  it("rejects an invalid batch target before dispatch", async () => {
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    const result = await executeBatchPipeline("Test", [{ method: "press_key", key: "a", target: { name: "x" } }], false, ctx());
+    expect((result.content[0] as any).text).toBe("Batch action #1 (press_key): Unknown argument(s): target");
+    expect(brokerDispatch).not.toHaveBeenCalled();
   });
 });

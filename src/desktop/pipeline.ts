@@ -7,7 +7,8 @@ import { acquireLock } from "./os/lock.js";
 import { startFocusTelemetry } from "./os/focus.js";
 import { normalizeKey } from "./os/key-normalize.js";
 import { verifyBrokerComponents } from "./broker/verify.js";
-import { brokerDispatch } from "./broker/dispatch.js";
+import { brokerDispatch, type Resolver } from "./broker/dispatch.js";
+import { describe, findInTree, parseTarget, resolveTarget } from "./ax-tree.js";
 
 import { sanitizeError } from "../kernel/sanitize.js";
 import { trimAxTree, trimContentBlocks, SAVE_TO_TMP_THRESHOLD } from "./ax-trim.js";
@@ -15,6 +16,44 @@ import { DESKTOP_TOOLS } from "./tools.js";
 import { validateArgs } from "../kernel/validate.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const TARGETABLE = new Set(["click", "set_value", "select_text", "scroll", "perform_secondary_action"]);
+const NEEDS_ELEMENT = new Set(["set_value", "select_text", "scroll", "perform_secondary_action"]);
+
+function stateText(content: ContentBlock[]): string {
+  return content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+}
+
+function images(content: ContentBlock[]): ContentBlock[] {
+  return content.filter((b) => b.type === "image");
+}
+
+function checkFind(method: string, args: Record<string, unknown>): string | undefined {
+  if (args.find === undefined) return undefined;
+  if (method !== "get_app_state") throw new Error(`${method} does not accept find.`);
+  if (typeof args.find !== "string" || !args.find.trim()) throw new Error("find must be a non-empty string.");
+  return args.find;
+}
+
+export function targetResolver(method: string, args: Record<string, unknown>): Resolver | undefined {
+  if (args.target === undefined) {
+    if (NEEDS_ELEMENT.has(method) && args.element_index === undefined) {
+      throw new Error(`${method} needs element_index or target.`);
+    }
+    return undefined;
+  }
+  if (!TARGETABLE.has(method)) throw new Error(`${method} does not accept target.`);
+  if (args.element_index !== undefined || args.x !== undefined || args.y !== undefined) {
+    throw new Error("Pass target or element_index/coordinates, not both.");
+  }
+  const target = parseTarget(args.target);
+  return (state, toolArgs) => {
+    const resolved = resolveTarget(stateText(state), target);
+    if ("error" in resolved) return { error: resolved.error };
+    const { target: _target, ...rest } = toolArgs;
+    return { args: { ...rest, element_index: resolved.node.index }, note: describe(resolved.node, false) };
+  };
+}
 
 export async function executePipeline(
   method: string,
@@ -32,6 +71,16 @@ export async function executePipeline(
     // Normalize press_key.
     if (method === "press_key" && typeof args.key === "string") {
       args = { ...args, key: normalizeKey(args.key) };
+    }
+
+    let resolve: Resolver | undefined;
+    let find: string | undefined;
+    try {
+      resolve = targetResolver(method, args);
+      find = checkFind(method, args);
+    } catch (e) {
+      outcome = "invalid_arguments";
+      throw e;
     }
 
     // Resolve app identity (list_apps has no app).
@@ -72,6 +121,7 @@ export async function executePipeline(
 
     const cleanArgs = { ...args };
     delete cleanArgs.screenshot;
+    delete cleanArgs.find;
 
     const isMutation = method !== "list_apps" && method !== "get_app_state";
     const result = await brokerDispatch(components, method, cleanArgs, {
@@ -82,6 +132,7 @@ export async function executePipeline(
       },
       requireActivationFor: isMutation ? bundleId ?? undefined : undefined,
       keepImages: args.screenshot === true,
+      resolve,
     });
 
     // Assert zero-turn architecture.
@@ -117,6 +168,11 @@ export async function executePipeline(
     });
 
     let responseContent = result.content;
+    if (!result.isError && result.note) {
+      responseContent = [{ type: "text", text: `${method}: ok (${result.note})` }, ...images(result.content)];
+    } else if (!result.isError && find) {
+      responseContent = [{ type: "text", text: findInTree(stateText(result.content), find) }, ...images(result.content)];
+    }
 
     // Trim large AX trees: cap element text values, save full to tmp if needed.
     const hasLargeText = responseContent.some(
@@ -212,7 +268,7 @@ export async function executeBatchPipeline(
     const batchable = new Map(
       DESKTOP_TOOLS.filter((t) => t.name !== "list_apps").map((t) => [t.name, t.inputSchema])
     );
-    actions.forEach((a, i) => {
+    const prepared = actions.map((a, i) => {
       if (!a.method || typeof a.method !== "string") {
         throw new Error("Each batch action must have a string 'method' field.");
       }
@@ -229,6 +285,11 @@ export async function executeBatchPipeline(
       }
       const err = validateArgs({ ...actionArgs, app }, schema);
       if (err) throw new Error(`Batch action #${i + 1} (${a.method}): ${err}`);
+      try {
+        return { resolve: targetResolver(a.method, actionArgs), find: checkFind(a.method, actionArgs) };
+      } catch (e) {
+        throw new Error(`Batch action #${i + 1} (${a.method}): ${e instanceof Error ? e.message : String(e)}`);
+      }
     });
 
     // Resolve app identity once for the whole batch.
@@ -252,14 +313,15 @@ export async function executeBatchPipeline(
     focusStop = focus.stop;
     focusFinish = focus.finish;
 
-    const normalized = actions.map((a) => {
+    const normalized = actions.map((a, i) => {
       const args: Record<string, unknown> = { ...a, app: bundleId };
       delete args.method;
       delete args.screenshot;
+      delete args.find;
       if (a.method === "press_key" && typeof args.key === "string") {
         args.key = normalizeKey(args.key);
       }
-      return { method: a.method, args, screenshot: a.screenshot === true };
+      return { method: a.method, args, screenshot: a.screenshot === true, ...prepared[i] };
     });
 
     const components = await verifyBrokerComponents();
@@ -267,13 +329,13 @@ export async function executeBatchPipeline(
     // The broker needs a get_app_state to establish CUA context; its output is not returned.
     const implicitActivation = normalized[0].method !== "get_app_state";
     if (implicitActivation) {
-      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot });
+      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined });
     }
     const [primary, ...rest] = normalized;
 
     const result = await brokerDispatch(components, primary.method, primary.args, {
       signal: ctx.signal,
-      followUpCalls: rest.map((r) => ({ tool: r.method, arguments: r.args, keepImages: r.screenshot })),
+      followUpCalls: rest.map((r) => ({ tool: r.method, arguments: r.args, keepImages: r.screenshot, resolve: r.resolve })),
       continueOnError,
       keepImages: primary.screenshot,
     });
@@ -287,8 +349,8 @@ export async function executeBatchPipeline(
     const telemetry = await focusFinish!();
 
     const executed = [
-      { ...primary, content: result.content, isError: result.isError },
-      ...(result.followUpResults ?? []).map((fu, i) => ({ ...rest[i], content: fu.content, isError: fu.isError })),
+      { ...primary, content: result.content, isError: result.isError, note: result.note },
+      ...(result.followUpResults ?? []).map((fu, i) => ({ ...rest[i], content: fu.content, isError: fu.isError, note: fu.note })),
     ];
     const anyError = executed.some((r) => r.isError);
     outcome = anyError ? "official_error" : "ok";
@@ -304,7 +366,8 @@ export async function executeBatchPipeline(
       durationMs: Date.now() - new Date(startedAt).getTime(),
       brokerVersion: components.codexVersion,
       clientBuild: components.clientBuild,
-      directCalls: executed.length,
+      directCalls: result.directCalls,
+      elicitationRequests: result.elicitationRequests,
       modelTurnsStarted: 0,
       ephemeralThread: true,
       ephemeralRuntimeContext: true,
@@ -351,6 +414,8 @@ interface ExecutedAction {
   method: string;
   content: ContentBlock[];
   isError: boolean;
+  note?: string;
+  find?: string;
 }
 
 export function renderBatch(executed: ExecutedAction[], implicitActivation: boolean, requested: number): ContentBlock[] {
@@ -384,9 +449,9 @@ export function renderBatch(executed: ExecutedAction[], implicitActivation: bool
     if (r.isError) {
       fitted = emit(`${label}: error\n${text || "(no error text returned)"}`, images);
     } else if (r.method === "get_app_state") {
-      fitted = emit(`${label}\n${trimAxTree(text).text}`, images);
+      fitted = emit(`${label}\n${r.find ? findInTree(text, r.find) : trimAxTree(text).text}`, images);
     } else {
-      fitted = emit(`${label}: ok`, images);
+      fitted = emit(r.note ? `${label}: ok (${r.note})` : `${label}: ok`, images);
     }
     if (!fitted) lines.push(`${label}: ${r.isError ? "error, " : ""}output omitted (response size limit)`);
   });
