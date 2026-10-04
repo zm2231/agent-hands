@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex";
+const CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 const EXPECTED_TEAM_ID = "2DC432GLL2";
 const CODESIGN_TIMEOUT = 10_000;
 
@@ -70,7 +70,7 @@ export interface BrokerComponents {
 export async function verifyBrokerComponents(): Promise<BrokerComponents> {
   // Verify codex app-server exists.
   if (!(await exists(CODEX_PATH))) {
-    throw new Error("ChatGPT app not found at /Applications/ChatGPT.app");
+    throw new Error(`Codex binary not found at ${CODEX_PATH}. Install or update the ChatGPT app.`);
   }
 
   // Find the Computer Use client.
