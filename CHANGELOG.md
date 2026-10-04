@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.1...agent-hands-v0.6.2) (2026-10-04)
+
+
+### Bug Fixes
+
+* **desktop:** find the Codex binary in the ChatGPT app's codex-cli bundle ([#34](https://github.com/zm2231/agent-hands/issues/34)) ([012044a](https://github.com/zm2231/agent-hands/commit/012044aa998ecc5d10c19e75f0191ca6d71541d2))
+
 ## [0.6.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.0...agent-hands-v0.6.1) (2026-09-26)
 
 
