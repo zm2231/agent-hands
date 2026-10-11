@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.3...agent-hands-v0.7.0) (2026-10-11)
+
+
+### Features
+
+* **browser:** add press_key and close actions ([#39](https://github.com/zm2231/agent-hands/issues/39)) ([0880cec](https://github.com/zm2231/agent-hands/commit/0880cecccd0a1c8ad1e605bf99a2402f1643505e))
+
 ## [0.6.3](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.2...agent-hands-v0.6.3) (2026-10-11)
 
 
