@@ -3,16 +3,20 @@ import type { Resolver } from "../src/desktop/broker/dispatch.js";
 
 const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
 let stateIndex = 5n;
+let stateError: string | null = null;
 
 const call = vi.fn(async (tool: string, args: Record<string, unknown>) => {
   calls.push({ tool, args });
+  if (tool === "get_app_state" && stateError) {
+    return { content: [{ type: "text", text: stateError }], isError: true, modelTurnsStarted: 0, ephemeralThread: true, elicitationRequests: 0 };
+  }
   const text = tool === "get_app_state" ? `\t${stateIndex} button Save` : `${tool} done`;
   if (tool !== "get_app_state") stateIndex++;
   return { content: [{ type: "text", text }], isError: false, modelTurnsStarted: 0, ephemeralThread: true, elicitationRequests: 0 };
 });
 
 vi.mock("../src/desktop/os/identity.js", () => ({
-  resolveAppIdentity: vi.fn().mockResolvedValue({ bundleId: "com.test.app", leaseId: null }),
+  resolveAppIdentity: vi.fn().mockResolvedValue({ bundleId: "com.test.app", leaseId: null, target: "com.test.app" }),
 }));
 vi.mock("../src/desktop/os/focus.js", () => ({
   startFocusTelemetry: vi.fn().mockReturnValue({ stop: vi.fn(), finish: vi.fn().mockResolvedValue({ backgroundPreserved: true, unrelatedFocusChanges: 0 }) }),
@@ -40,6 +44,16 @@ describe("brokerDispatch target resolution", () => {
   beforeEach(() => {
     calls.length = 0;
     stateIndex = 5n;
+    stateError = null;
+  });
+
+  it("returns the upstream error when the state read for a target fails", async () => {
+    stateError = "Ambiguous app identifier 'com.test.app'.";
+    const { brokerDispatch } = await import("../src/desktop/broker/dispatch.js");
+    const result = await brokerDispatch({} as any, "click", { app, target: { name: "Save" } }, { resolve: resolveSave });
+    expect(calls.map((c) => c.tool)).toEqual(["get_app_state"]);
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: stateError }]);
   });
 
   it("reads fresh state before a target action and forwards the resolved index without target", async () => {
@@ -89,6 +103,15 @@ describe("brokerDispatch target resolution", () => {
       ],
     });
     expect(calls.map((c) => c.tool)).toEqual(["get_app_state", "press_key"]);
+  });
+
+  it("sends Computer Use the app path when the caller gave one", async () => {
+    const { resolveAppIdentity } = await import("../src/desktop/os/identity.js");
+    vi.mocked(resolveAppIdentity).mockResolvedValueOnce({ bundleId: "com.test.app", leaseId: null as any, target: "/Applications/Example.app" });
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    await executePipeline("click", { app: "/Applications/Example.app", target: { name: "Save" } },
+      { signal: new AbortController().signal, audit: vi.fn().mockResolvedValue(undefined), elicit: vi.fn() } as any);
+    expect(calls.map((c) => c.args.app)).toEqual(["/Applications/Example.app", "/Applications/Example.app"]);
   });
 
   it("forwards large indexes exactly and audits every upstream call of a target batch", async () => {

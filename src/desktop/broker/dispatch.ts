@@ -99,11 +99,12 @@ export async function brokerDispatch(
       resolve: Resolver | undefined,
     ): Promise<{ content: ContentBlock[]; isError: boolean; note?: string }> => {
       if (!resolve) return run(tool, toolArgs);
-      const state = lastState ?? await (async () => {
+      let state = lastState;
+      if (!state) {
         const fresh = await run("get_app_state", { app: toolArgs.app });
-        return fresh.isError ? null : fresh.content;
-      })();
-      if (!state) return { content: [{ type: "text", text: "Could not read app state to resolve the target." }], isError: true };
+        if (fresh.isError) return { content: fresh.content, isError: true };
+        state = fresh.content;
+      }
       const resolved = resolve(state, toolArgs);
       if ("error" in resolved) return { content: [{ type: "text", text: resolved.error }], isError: true };
       const result = await run(tool, resolved.args);
