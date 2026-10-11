@@ -1,5 +1,6 @@
 export { clickAction } from "./click.js";
 export { typeAction } from "./type.js";
+export { pressKeyAction, parseKey } from "./press-key.js";
 export { screenshotAction } from "./screenshot.js";
 export { navigateAction } from "./navigate.js";
 export { evaluateAction } from "./evaluate.js";

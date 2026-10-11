@@ -112,7 +112,7 @@ Acting by `target` saves more, because no state is returned at all. Computing 7 
 
 ## Browser actions
 
-One tool (`browser`) with 17 actions: `start`, `tabs`, `open`, `find`, `click`, `type`, `screenshot`, `html`, `navigate`, `evaluate`, `network`, `load_all`, `raw`, `read_result`, `discard_result`, `stop`. Call `help` for the full reference.
+One tool (`browser`) with 19 actions: `start`, `tabs`, `open`, `find`, `click`, `type`, `press_key`, `close`, `screenshot`, `html`, `navigate`, `evaluate`, `network`, `load_all`, `raw`, `read_result`, `discard_result`, `stop`. Call `help` for the full reference.
 
 ### Browser via extension (no debug port)
 
