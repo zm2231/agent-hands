@@ -4,6 +4,7 @@ import type { Resolver } from "../src/desktop/broker/dispatch.js";
 const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
 let stateIndex = 5n;
 let stateError: string | null = null;
+let activated = new Set<string>(["com.test.app"]);
 
 const call = vi.fn(async (tool: string, args: Record<string, unknown>) => {
   calls.push({ tool, args });
@@ -26,7 +27,7 @@ vi.mock("../src/desktop/broker/verify.js", () => ({
 }));
 vi.mock("../src/desktop/broker/pool.js", () => ({
   acquireSession: vi.fn(async () => ({
-    session: { call, isAppActivated: () => true, markAppActivated: () => {} },
+    session: { call, isAppActivated: (a: string) => activated.has(a), markAppActivated: (a: string) => { activated.add(a); } },
     release: () => {},
   })),
 }));
@@ -45,6 +46,7 @@ describe("brokerDispatch target resolution", () => {
     calls.length = 0;
     stateIndex = 5n;
     stateError = null;
+    activated = new Set(["com.test.app"]);
   });
 
   it("returns the upstream error when the state read for a target fails", async () => {
@@ -112,6 +114,46 @@ describe("brokerDispatch target resolution", () => {
     await executePipeline("click", { app: "/Applications/Example.app", target: { name: "Save" } },
       { signal: new AbortController().signal, audit: vi.fn().mockResolvedValue(undefined), elicit: vi.fn() } as any);
     expect(calls.map((c) => c.args.app)).toEqual(["/Applications/Example.app", "/Applications/Example.app"]);
+  });
+
+  it("sends the app path on every batch call, including implicit activation", async () => {
+    const { resolveAppIdentity } = await import("../src/desktop/os/identity.js");
+    vi.mocked(resolveAppIdentity).mockResolvedValueOnce({ bundleId: "com.test.app", leaseId: null as any, target: "/Applications/Example.app" });
+    const { executeBatchPipeline } = await import("../src/desktop/pipeline.js");
+    await executeBatchPipeline("/Applications/Example.app", [
+      { method: "click", target: { name: "Save" } },
+      { method: "press_key", key: "Return" },
+    ], false, { signal: new AbortController().signal, audit: vi.fn().mockResolvedValue(undefined), elicit: vi.fn() } as any);
+    expect(calls.map((c) => [c.tool, c.args.app])).toEqual([
+      ["get_app_state", "/Applications/Example.app"],
+      ["click", "/Applications/Example.app"],
+      ["press_key", "/Applications/Example.app"],
+    ]);
+  });
+
+  it("activates and caches activation by the app path for a mutation without a target", async () => {
+    const { resolveAppIdentity } = await import("../src/desktop/os/identity.js");
+    vi.mocked(resolveAppIdentity).mockResolvedValue({ bundleId: "com.test.app", leaseId: null as any, target: "/Applications/Example.app" });
+    const { executePipeline } = await import("../src/desktop/pipeline.js");
+    const ctx = { signal: new AbortController().signal, audit: vi.fn().mockResolvedValue(undefined), elicit: vi.fn() } as any;
+    await executePipeline("press_key", { app: "/Applications/Example.app", key: "Return" }, ctx);
+    await executePipeline("press_key", { app: "/Applications/Example.app", key: "Return" }, ctx);
+    vi.mocked(resolveAppIdentity).mockResolvedValue({ bundleId: "com.test.app", leaseId: null as any, target: "com.test.app" });
+    expect(calls.map((c) => [c.tool, c.args.app])).toEqual([
+      ["get_app_state", "/Applications/Example.app"],
+      ["press_key", "/Applications/Example.app"],
+      ["press_key", "/Applications/Example.app"],
+    ]);
+  });
+
+  it("reports a failed target state read inside a batch", async () => {
+    const { brokerDispatch } = await import("../src/desktop/broker/dispatch.js");
+    stateError = "Ambiguous app identifier 'com.test.app'.";
+    const failed = await brokerDispatch({} as any, "press_key", { app, key: "Tab" }, {
+      followUpCalls: [{ tool: "click", arguments: { app, target: { name: "Save" } }, resolve: resolveSave }],
+    });
+    expect(calls.map((c) => c.tool)).toEqual(["press_key", "get_app_state"]);
+    expect(failed.followUpResults).toEqual([expect.objectContaining({ isError: true, content: [{ type: "text", text: stateError }] })]);
   });
 
   it("forwards large indexes exactly and audits every upstream call of a target batch", async () => {
