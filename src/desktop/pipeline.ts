@@ -116,8 +116,7 @@ export async function executePipeline(
       }
       bundleId = identity.bundleId;
       leaseId = identity.leaseId;
-      // Rewrite app to canonical bundle id.
-      args = { ...args, app: bundleId };
+      args = { ...args, app: identity.target };
     }
 
     // Acquire lock.
@@ -146,7 +145,7 @@ export async function executePipeline(
         const resp = await ctx.elicit(params);
         return { action: resp.action };
       },
-      requireActivationFor: isMutation ? bundleId ?? undefined : undefined,
+      requireActivationFor: isMutation ? args.app as string : undefined,
       keepImages: args.screenshot === true,
       resolve,
     });
@@ -328,6 +327,7 @@ export async function executeBatchPipeline(
       );
     }
     const bundleId = identity.bundleId;
+    const target = identity.target!;
     const leaseId = identity.leaseId;
 
     // Acquire lock once.
@@ -341,7 +341,7 @@ export async function executeBatchPipeline(
     focusFinish = focus.finish;
 
     const normalized = actions.map((a, i) => {
-      const args: Record<string, unknown> = { ...a, app: bundleId };
+      const args: Record<string, unknown> = { ...a, app: target };
       delete args.method;
       delete args.screenshot;
       delete args.find;
@@ -358,7 +358,7 @@ export async function executeBatchPipeline(
     // The broker needs a get_app_state to establish CUA context; its output is not returned.
     const implicitActivation = normalized[0].method !== "get_app_state";
     if (implicitActivation) {
-      normalized.unshift({ method: "get_app_state", args: { app: bundleId }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined, full: false, instructions: false });
+      normalized.unshift({ method: "get_app_state", args: { app: target }, screenshot: normalized[0].screenshot, resolve: undefined, find: undefined, full: false, instructions: false });
     }
     const [primary, ...rest] = normalized;
 

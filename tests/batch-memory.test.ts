@@ -4,6 +4,7 @@ vi.mock("../src/desktop/os/identity.js", () => ({
   resolveAppIdentity: vi.fn().mockResolvedValue({
     bundleId: "com.test.app",
     leaseId: "lease-test",
+    target: "com.test.app",
   }),
 }));
 

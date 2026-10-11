@@ -11,6 +11,7 @@ const BUNDLE_ID_RE = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 export interface AppIdentity {
   bundleId: string | null;
   leaseId: string;
+  target: string | null;
 }
 
 async function bundleIdFromPath(appPath: string): Promise<AppIdentity> {
@@ -25,11 +26,11 @@ async function bundleIdFromPath(appPath: string): Promise<AppIdentity> {
     ]);
     const bid = stdout.trim();
     if (BUNDLE_ID_RE.test(bid)) {
-      return { bundleId: bid, leaseId: bid.toLowerCase() };
+      return { bundleId: bid, leaseId: bid.toLowerCase(), target: resolved };
     }
-    return { bundleId: null, leaseId: `path:${resolved.toLowerCase()}` };
+    return { bundleId: null, leaseId: `path:${resolved.toLowerCase()}`, target: null };
   } catch {
-    return { bundleId: null, leaseId: `path:${appPath.toLowerCase()}` };
+    return { bundleId: null, leaseId: `path:${appPath.toLowerCase()}`, target: null };
   }
 }
 
@@ -50,12 +51,12 @@ async function bundleIdFromIdentifier(identifier: string): Promise<AppIdentity> 
     ]);
     const bid = stdout.trim();
     if (BUNDLE_ID_RE.test(bid)) {
-      return { bundleId: bid, leaseId: bid.toLowerCase() };
+      return { bundleId: bid, leaseId: bid.toLowerCase(), target: bid };
     }
   } catch {
     // Fall through.
   }
-  return { bundleId: null, leaseId: identifier.toLowerCase() };
+  return { bundleId: null, leaseId: identifier.toLowerCase(), target: null };
 }
 
 async function bundleIdFromName(name: string): Promise<AppIdentity> {
@@ -67,12 +68,12 @@ async function bundleIdFromName(name: string): Promise<AppIdentity> {
     ]);
     const bid = stdout.trim();
     if (BUNDLE_ID_RE.test(bid)) {
-      return { bundleId: bid, leaseId: bid.toLowerCase() };
+      return { bundleId: bid, leaseId: bid.toLowerCase(), target: bid };
     }
   } catch {
     // Fall through.
   }
-  return { bundleId: null, leaseId: `name:${name.toLowerCase()}` };
+  return { bundleId: null, leaseId: `name:${name.toLowerCase()}`, target: null };
 }
 
 export async function resolveAppIdentity(
