@@ -11,7 +11,7 @@ import { TabBridge } from "./tab-bridge.js";
 import { takeSnapshot } from "./snapshot.js";
 import { storeText, readResult, discardResult } from "./artifacts.js";
 import {
-  clickAction, typeAction, screenshotAction, navigateAction,
+  clickAction, typeAction, pressKeyAction, parseKey, closeTabAction, screenshotAction, navigateAction,
   evaluateAction, htmlAction, networkAction, rawAction,
   loadAllAction, helpAction,
 } from "./actions/index.js";
@@ -21,7 +21,7 @@ const MIN_TARGET_PREFIX_LENGTH = 8;
 const HANDLE_RE = /^[a-f0-9-]{36}$/;
 
 const VALID_ACTIONS = new Set([
-  "help", "start", "tabs", "open", "find", "click", "type",
+  "help", "start", "tabs", "open", "find", "click", "type", "press_key", "close",
   "screenshot", "html", "navigate", "evaluate", "network",
   "load_all", "raw", "read_result", "discard_result", "stop",
 ]);
@@ -34,6 +34,8 @@ const ACTION_FIELDS: Record<string, Set<string>> = {
   find: new Set(["ref_id", "pattern", "lineno", "response_length"]),
   click: new Set(["ref_id", "id", "selector", "x", "y"]),
   type: new Set(["ref_id", "id", "text"]),
+  press_key: new Set(["ref_id", "id", "key"]),
+  close: new Set(["ref_id"]),
   screenshot: new Set(["ref_id", "id", "selector"]),
   html: new Set(["ref_id", "id", "selector"]),
   navigate: new Set(["ref_id", "url"]),
@@ -112,8 +114,8 @@ export async function closeBrowserConnection(): Promise<void> {
   extensionConnection = null;
   for (const bridge of bridges.values()) bridge.close();
   bridges.clear();
-  cdp?.close();
   await connection?.close();
+  cdp?.close();
 }
 
 async function getPages(cdp: CDPClient): Promise<Array<{ targetId: string; title: string; url: string }>> {
@@ -341,7 +343,22 @@ async function handleSingleAction(
   const refId = requireRefId(fields, action);
   const targetId = resolveTargetId(refId, pages);
   const computedRefId = computeRefId(targetId, allIds);
+  if (action === "press_key") {
+    if (typeof fields.key !== "string" || !fields.key) throw new Error("press_key requires a key.");
+    parseKey(fields.key);
+  }
   const bridge = await ensureBridge(cdp, targetId);
+
+  if (action === "close") {
+    try {
+      const result = await bridge.enqueue(() =>
+        closeTabAction(cdp, bridge.sessionId, async () => (await getPages(cdp)).some((p) => p.targetId === targetId))
+      );
+      return { ref_id: computedRefId, result };
+    } finally {
+      bridge.close();
+    }
+  }
 
   return bridge.enqueue(async () => {
     if (signal?.aborted) throw new Error("Request aborted.");
@@ -368,6 +385,10 @@ async function handleSingleAction(
       case "type": {
         if (typeof fields.text !== "string" || !fields.text) throw new Error("type requires non-empty text.");
         const result = await typeAction(cdp, bridge.sessionId, bridge.elementRefs, fields);
+        return { ref_id: computedRefId, result };
+      }
+      case "press_key": {
+        const result = await pressKeyAction(cdp, bridge.sessionId, bridge.elementRefs, fields);
         return { ref_id: computedRefId, result };
       }
       case "screenshot": {
@@ -455,6 +476,7 @@ export function createBrowserSurface(): SurfaceDescriptor {
         x: { type: "number" },
         y: { type: "number" },
         text: { type: "string" },
+        key: { type: "string" },
         expression: { type: "string" },
         method: { type: "string" },
         params: { type: "object" },

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { createFakeCDP } from "./fake-cdp.js";
 import { clickAction } from "../src/browser/actions/click.js";
 import { typeAction } from "../src/browser/actions/type.js";
+import { pressKeyAction, parseKey } from "../src/browser/actions/press-key.js";
+import { closeTabAction } from "../src/browser/actions/close.js";
 import { navigateAction } from "../src/browser/actions/navigate.js";
 import { evaluateAction } from "../src/browser/actions/evaluate.js";
 import { htmlAction } from "../src/browser/actions/html.js";
@@ -53,6 +55,84 @@ describe("type action", () => {
     const refs = new Map<number, number>([[1, 102]]);
     const result = await typeAction(cdp, "s1", refs, { id: 1, text: "hello" });
     expect(result).toContain("Typed 5 characters");
+  });
+});
+
+function recordKeys(cdp: ReturnType<typeof createFakeCDP>) {
+  const events: Record<string, unknown>[] = [];
+  const send = cdp.send.bind(cdp);
+  cdp.send = async (method, params, sessionId) => {
+    if (method === "Input.dispatchKeyEvent") events.push(params ?? {});
+    return send(method, params, sessionId);
+  };
+  return events;
+}
+
+describe("press_key action", () => {
+  it("presses Enter with text so forms submit", async () => {
+    const cdp = createFakeCDP();
+    const events = recordKeys(cdp);
+    const result = await pressKeyAction(cdp, "s1", new Map(), { key: "Enter" });
+    expect(result).toBe("Pressed Enter");
+    expect(events).toEqual([
+      { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0, type: "keyDown", text: "\r" },
+      { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0, type: "keyUp" },
+    ]);
+  });
+
+  it("sends modifier chords without text", async () => {
+    const cdp = createFakeCDP();
+    const events = recordKeys(cdp);
+    await pressKeyAction(cdp, "s1", new Map(), { key: "Cmd+a" });
+    expect(events[0]).toMatchObject({ key: "a", code: "KeyA", modifiers: 4, type: "rawKeyDown", text: undefined });
+    expect(parseKey("Shift+Tab")).toMatchObject({ def: { key: "Tab" }, modifiers: 8 });
+  });
+
+  it("focuses the element first when given an id", async () => {
+    const cdp = createFakeCDP([
+      { method: "Runtime.callFunctionOn", sessionFilter: "s1", result: { result: { value: true } } },
+    ]);
+    const result = await pressKeyAction(cdp, "s1", new Map([[3, 103]]), { key: "Escape", id: 3 });
+    expect(result).toBe("Pressed Escape in element 3");
+  });
+
+  it("treats a trailing plus as the plus key", () => {
+    expect(parseKey("+")).toMatchObject({ def: { key: "+", code: "", keyCode: 0, text: "+" }, modifiers: 0 });
+    expect(parseKey("Ctrl++")).toMatchObject({ def: { key: "+" }, modifiers: 2 });
+  });
+
+  it("gives non-ASCII characters no physical key code", () => {
+    expect(parseKey("ß")).toMatchObject({ def: { key: "ß", code: "", keyCode: 0, text: "ß" } });
+    expect(parseKey("é").def.code).toBe("");
+  });
+
+  it("rejects unknown keys and modifiers", () => {
+    expect(() => parseKey("Hyper+a")).toThrow('Unknown modifier "Hyper"');
+    expect(() => parseKey("Launch")).toThrow('Unknown key "Launch"');
+  });
+});
+
+describe("close action", () => {
+  it("closes the tab through Page.close on its session and confirms it is gone", async () => {
+    const cdp = createFakeCDP();
+    const sent: Array<[string, string | undefined]> = [];
+    const send = cdp.send.bind(cdp);
+    cdp.send = async (method, params, sessionId) => { sent.push([method, sessionId]); return send(method, params, sessionId); };
+    let polls = 0;
+    const result = await closeTabAction(cdp, "s1", async () => ++polls < 3, 1_000, 1);
+    expect(result).toBe("Tab closed.");
+    expect(sent).toEqual([["Page.close", "s1"]]);
+    expect(polls).toBe(3);
+  });
+
+  it("reports a tab that stays open", async () => {
+    const cdp = createFakeCDP();
+    await expect(closeTabAction(cdp, "s1", async () => true, 20, 1)).rejects.toThrow("leave-page prompt");
+  });
+
+  it("propagates a failed Page.close", async () => {
+    const cdp = createFakeCDP([{ method: "Page.close", error: { code: -32000, message: "Target closed" } }]);
+    await expect(closeTabAction(cdp, "s1", async () => false)).rejects.toThrow("Target closed");
   });
 });
 
@@ -153,5 +233,6 @@ describe("help action", () => {
     expect(result.actions).toBeDefined();
     expect(Object.keys(result.actions as object)).toContain("click");
     expect(Object.keys(result.actions as object)).toContain("tabs");
+    expect(Object.keys(result.actions as object)).toEqual(expect.arrayContaining(["press_key", "close"]));
   });
 });
