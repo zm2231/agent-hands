@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.0...agent-hands-v0.7.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **desktop:** target apps by path so copies sharing a bundle id stay distinct ([#41](https://github.com/zm2231/agent-hands/issues/41)) ([5f631f5](https://github.com/zm2231/agent-hands/commit/5f631f5a64f7765471d73060b8c0d62863e807a5))
+
 ## [0.7.0](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.3...agent-hands-v0.7.0) (2026-10-11)
 
 
