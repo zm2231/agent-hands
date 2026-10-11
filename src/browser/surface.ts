@@ -11,7 +11,7 @@ import { TabBridge } from "./tab-bridge.js";
 import { takeSnapshot } from "./snapshot.js";
 import { storeText, readResult, discardResult } from "./artifacts.js";
 import {
-  clickAction, typeAction, pressKeyAction, parseKey, screenshotAction, navigateAction,
+  clickAction, typeAction, pressKeyAction, parseKey, closeTabAction, screenshotAction, navigateAction,
   evaluateAction, htmlAction, networkAction, rawAction,
   loadAllAction, helpAction,
 } from "./actions/index.js";
@@ -19,7 +19,6 @@ import {
 const OUTPUT_BUDGET_BYTES = 38_000;
 const MIN_TARGET_PREFIX_LENGTH = 8;
 const HANDLE_RE = /^[a-f0-9-]{36}$/;
-const CLOSE_TIMEOUT_MS = 3_000;
 
 const VALID_ACTIONS = new Set([
   "help", "start", "tabs", "open", "find", "click", "type", "press_key", "close",
@@ -351,14 +350,14 @@ async function handleSingleAction(
   const bridge = await ensureBridge(cdp, targetId);
 
   if (action === "close") {
-    await bridge.enqueue(() => cdp.send("Page.close", {}, bridge.sessionId));
-    bridge.close();
-    const deadline = Date.now() + CLOSE_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (!(await getPages(cdp)).some((p) => p.targetId === targetId)) return { ref_id: computedRefId, result: "Tab closed." };
-      await new Promise((r) => setTimeout(r, 100));
+    try {
+      const result = await bridge.enqueue(() =>
+        closeTabAction(cdp, bridge.sessionId, async () => (await getPages(cdp)).some((p) => p.targetId === targetId))
+      );
+      return { ref_id: computedRefId, result };
+    } finally {
+      bridge.close();
     }
-    throw new Error("Tab is still open; the page may be showing a leave-page prompt.");
   }
 
   return bridge.enqueue(async () => {

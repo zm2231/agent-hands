@@ -39,10 +39,12 @@ export interface ParsedKey {
 }
 
 export function parseKey(spec: string): ParsedKey {
-  const parts = spec.split("+").map((p) => p.trim());
-  const name = parts.pop() ?? "";
+  const literalPlus = spec === "+" || spec.endsWith("++");
+  const parts = literalPlus ? (spec === "+" ? [] : spec.slice(0, -2).split("+")) : spec.split("+");
+  const name = literalPlus ? "+" : (parts.pop() ?? "").trim();
   let modifiers = 0;
-  for (const part of parts) {
+  for (const raw of parts) {
+    const part = raw.trim();
     const bit = MODIFIERS[part.toLowerCase()];
     if (bit === undefined) throw new Error(`Unknown modifier "${part}" in key "${spec}".`);
     modifiers |= bit;
@@ -55,9 +57,10 @@ export function parseKey(spec: string): ParsedKey {
     return { def: { key: `F${n}`, code: `F${n}`, keyCode: 111 + n }, modifiers };
   }
   if ([...name].length === 1) {
-    const upper = name.toUpperCase();
-    const code = /[A-Z]/.test(upper) ? `Key${upper}` : /[0-9]/.test(name) ? `Digit${name}` : "";
-    const keyCode = /[A-Z0-9]/.test(upper) ? upper.charCodeAt(0) : 0;
+    const letter = /^[A-Za-z]$/.test(name);
+    const digit = /^[0-9]$/.test(name);
+    const code = letter ? `Key${name.toUpperCase()}` : digit ? `Digit${name}` : "";
+    const keyCode = letter || digit ? name.toUpperCase().charCodeAt(0) : 0;
     return { def: { key: name, code, keyCode, text: name }, modifiers };
   }
   throw new Error(`Unknown key "${name}". Use a single character or a named key such as Enter, Tab, Escape, ArrowDown.`);

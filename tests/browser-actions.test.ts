@@ -3,6 +3,7 @@ import { createFakeCDP } from "./fake-cdp.js";
 import { clickAction } from "../src/browser/actions/click.js";
 import { typeAction } from "../src/browser/actions/type.js";
 import { pressKeyAction, parseKey } from "../src/browser/actions/press-key.js";
+import { closeTabAction } from "../src/browser/actions/close.js";
 import { navigateAction } from "../src/browser/actions/navigate.js";
 import { evaluateAction } from "../src/browser/actions/evaluate.js";
 import { htmlAction } from "../src/browser/actions/html.js";
@@ -95,9 +96,43 @@ describe("press_key action", () => {
     expect(result).toBe("Pressed Escape in element 3");
   });
 
+  it("treats a trailing plus as the plus key", () => {
+    expect(parseKey("+")).toMatchObject({ def: { key: "+", code: "", keyCode: 0, text: "+" }, modifiers: 0 });
+    expect(parseKey("Ctrl++")).toMatchObject({ def: { key: "+" }, modifiers: 2 });
+  });
+
+  it("gives non-ASCII characters no physical key code", () => {
+    expect(parseKey("ß")).toMatchObject({ def: { key: "ß", code: "", keyCode: 0, text: "ß" } });
+    expect(parseKey("é").def.code).toBe("");
+  });
+
   it("rejects unknown keys and modifiers", () => {
     expect(() => parseKey("Hyper+a")).toThrow('Unknown modifier "Hyper"');
     expect(() => parseKey("Launch")).toThrow('Unknown key "Launch"');
+  });
+});
+
+describe("close action", () => {
+  it("closes the tab through Page.close on its session and confirms it is gone", async () => {
+    const cdp = createFakeCDP();
+    const sent: Array<[string, string | undefined]> = [];
+    const send = cdp.send.bind(cdp);
+    cdp.send = async (method, params, sessionId) => { sent.push([method, sessionId]); return send(method, params, sessionId); };
+    let polls = 0;
+    const result = await closeTabAction(cdp, "s1", async () => ++polls < 3, 1_000, 1);
+    expect(result).toBe("Tab closed.");
+    expect(sent).toEqual([["Page.close", "s1"]]);
+    expect(polls).toBe(3);
+  });
+
+  it("reports a tab that stays open", async () => {
+    const cdp = createFakeCDP();
+    await expect(closeTabAction(cdp, "s1", async () => true, 20, 1)).rejects.toThrow("leave-page prompt");
+  });
+
+  it("propagates a failed Page.close", async () => {
+    const cdp = createFakeCDP([{ method: "Page.close", error: { code: -32000, message: "Target closed" } }]);
+    await expect(closeTabAction(cdp, "s1", async () => false)).rejects.toThrow("Target closed");
   });
 });
 
