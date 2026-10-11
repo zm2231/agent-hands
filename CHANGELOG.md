@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.2...agent-hands-v0.6.3) (2026-10-11)
+
+
+### Bug Fixes
+
+* **desktop:** launch the Computer Use client directly from codex ([#37](https://github.com/zm2231/agent-hands/issues/37)) ([e6fee0d](https://github.com/zm2231/agent-hands/commit/e6fee0de37f586bb93cf17f737532de577bd2fe5))
+
 ## [0.6.2](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.6.1...agent-hands-v0.6.2) (2026-10-04)
 
 
