@@ -34,12 +34,12 @@ interface Harness {
   debuggerDetached: () => number[];
 }
 
-async function loadBackground(): Promise<Harness> {
+async function loadBackground(existingAlarms = new Map<string, unknown>()): Promise<Harness> {
   const source = await readFile(backgroundPath, "utf8");
 
   const timers: Timer[] = [];
   let timerId = 0;
-  const alarms = new Map<string, unknown>();
+  const alarms = existingAlarms;
   const alarmListeners: Listener[] = [];
   const ports: FakePort[] = [];
   let connectNativeCalls = 0;
@@ -94,6 +94,7 @@ async function loadBackground(): Promise<Harness> {
     },
     alarms: {
       create: (name: string, info: unknown) => { alarms.set(name, info); },
+      get: async (name: string) => (alarms.has(name) ? { name, ...(alarms.get(name) as object) } : undefined),
       clear: async (name: string) => alarms.delete(name),
       onAlarm: { addListener: (l: Listener) => alarmListeners.push(l) },
     },
@@ -216,6 +217,22 @@ describe("extension native reconnect backoff (real background.js)", () => {
     h.currentPort()!.onDisconnect.fire();
     await h.flush();
     expect(h.backoffTimers().map((t) => t.delay)).toEqual([1000]);
+  });
+
+  it("stays in alarm retry mode when the service worker restarts with the alarm still set", async () => {
+    const restarted = await loadBackground(new Map([["agent-hands-reconnect", { periodInMinutes: 1 }]]));
+    await restarted.flush();
+    expect(restarted.connectNativeCalls).toBe(1);
+
+    restarted.currentPort()!.onDisconnect.fire();
+    await restarted.flush();
+    expect(restarted.backoffTimers()).toEqual([]);
+    expect(restarted.alarms.has("agent-hands-reconnect")).toBe(true);
+
+    await restarted.fireAlarm("agent-hands-reconnect");
+    expect(restarted.connectNativeCalls).toBe(2);
+    await restarted.runStableTimer();
+    expect(restarted.alarms.has("agent-hands-reconnect")).toBe(false);
   });
 
   it("resets the attempt count after a connection stays up, without any host message", async () => {

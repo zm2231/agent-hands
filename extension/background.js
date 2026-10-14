@@ -164,8 +164,16 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   }
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === RECONNECT_ALARM) void ensureOffscreen().then(connectNative);
+const restored = chrome.alarms.get(RECONNECT_ALARM).then((alarm) => {
+  if (alarm) nativeAttempts = MAX_NATIVE_ATTEMPTS;
 });
 
-void ensureOffscreen().then(connectNative);
+function reconnect() {
+  void restored.then(ensureOffscreen).then(connectNative);
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) reconnect();
+});
+
+reconnect();
