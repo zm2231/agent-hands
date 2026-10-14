@@ -146,8 +146,8 @@ async function handle(message) {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-hands-offscreen") return;
-  port.onMessage.addListener(() => connectNative());
-  connectNative();
+  port.onMessage.addListener(() => void restored.then(connectNative));
+  void restored.then(connectNative);
 });
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -168,8 +168,12 @@ const restored = chrome.alarms.get(RECONNECT_ALARM).then((alarm) => {
   if (alarm) nativeAttempts = MAX_NATIVE_ATTEMPTS;
 });
 
+let reconnecting;
+
 function reconnect() {
-  void restored.then(ensureOffscreen).then(connectNative);
+  reconnecting ??= restored.then(ensureOffscreen).then(connectNative).catch(() => {}).finally(() => {
+    reconnecting = undefined;
+  });
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {

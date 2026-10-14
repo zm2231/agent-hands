@@ -28,6 +28,7 @@ interface Harness {
   runStableTimer: () => Promise<void>;
   currentPort: () => FakePort | undefined;
   offscreenClosed: () => number;
+  offscreenCreated: () => number;
   flush: () => Promise<void>;
   runNextTimer: () => Promise<void>;
   debuggerAttached: () => number[];
@@ -44,6 +45,7 @@ async function loadBackground(existingAlarms = new Map<string, unknown>()): Prom
   const ports: FakePort[] = [];
   let connectNativeCalls = 0;
   let offscreenClosed = 0;
+  let offscreenCreated = 0;
   const attached: number[] = [];
   const detached: number[] = [];
   let uuid = 0;
@@ -80,7 +82,10 @@ async function loadBackground(existingAlarms = new Map<string, unknown>()): Prom
       onConnect: { addListener: (_l: Listener) => {} },
     },
     offscreen: {
-      createDocument: async () => {},
+      createDocument: async () => {
+        offscreenCreated += 1;
+        if (offscreenCreated > 1 && offscreenClosed === 0) throw new Error("Only a single offscreen document may be created.");
+      },
       closeDocument: async () => {
         offscreenClosed += 1;
       },
@@ -151,6 +156,7 @@ async function loadBackground(existingAlarms = new Map<string, unknown>()): Prom
     },
     currentPort: () => ports[ports.length - 1],
     offscreenClosed: () => offscreenClosed,
+    offscreenCreated: () => offscreenCreated,
     debuggerAttached: () => attached,
     debuggerDetached: () => detached,
     flush,
@@ -233,6 +239,13 @@ describe("extension native reconnect backoff (real background.js)", () => {
     expect(restarted.connectNativeCalls).toBe(2);
     await restarted.runStableTimer();
     expect(restarted.alarms.has("agent-hands-reconnect")).toBe(false);
+  });
+
+  it("creates one offscreen document and one connection when an alarm wakes a stopped worker", async () => {
+    const woken = await loadBackground(new Map([["agent-hands-reconnect", { periodInMinutes: 1 }]]));
+    await woken.fireAlarm("agent-hands-reconnect");
+    expect(woken.offscreenCreated()).toBe(1);
+    expect(woken.connectNativeCalls).toBe(1);
   });
 
   it("resets the attempt count after a connection stays up, without any host message", async () => {
