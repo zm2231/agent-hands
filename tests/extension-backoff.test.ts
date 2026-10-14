@@ -17,24 +17,35 @@ interface FakePort {
   posted: unknown[];
 }
 
+interface Timer { id: number; delay: number; fn: () => void }
+
 interface Harness {
   connectNativeCalls: number;
-  timers: Array<{ delay: number; fn: () => void }>;
+  timers: Timer[];
+  backoffTimers: () => Timer[];
+  alarms: Map<string, unknown>;
+  fireAlarm: (name: string) => Promise<void>;
+  runStableTimer: () => Promise<void>;
   currentPort: () => FakePort | undefined;
   offscreenClosed: () => number;
+  offscreenCreated: () => number;
   flush: () => Promise<void>;
   runNextTimer: () => Promise<void>;
   debuggerAttached: () => number[];
   debuggerDetached: () => number[];
 }
 
-async function loadBackground(): Promise<Harness> {
+async function loadBackground(existingAlarms = new Map<string, unknown>()): Promise<Harness> {
   const source = await readFile(backgroundPath, "utf8");
 
-  const timers: Array<{ delay: number; fn: () => void }> = [];
+  const timers: Timer[] = [];
+  let timerId = 0;
+  const alarms = existingAlarms;
+  const alarmListeners: Listener[] = [];
   const ports: FakePort[] = [];
   let connectNativeCalls = 0;
   let offscreenClosed = 0;
+  let offscreenCreated = 0;
   const attached: number[] = [];
   const detached: number[] = [];
   let uuid = 0;
@@ -71,7 +82,10 @@ async function loadBackground(): Promise<Harness> {
       onConnect: { addListener: (_l: Listener) => {} },
     },
     offscreen: {
-      createDocument: async () => {},
+      createDocument: async () => {
+        offscreenCreated += 1;
+        if (offscreenCreated > 1 && offscreenClosed === 0) throw new Error("Only a single offscreen document may be created.");
+      },
       closeDocument: async () => {
         offscreenClosed += 1;
       },
@@ -82,6 +96,12 @@ async function loadBackground(): Promise<Harness> {
       sendCommand: async () => ({}),
       onEvent: { addListener: (_l: Listener) => {} },
       onDetach: { addListener: (_l: Listener) => {} },
+    },
+    alarms: {
+      create: (name: string, info: unknown) => { alarms.set(name, info); },
+      get: async (name: string) => (alarms.has(name) ? { name, ...(alarms.get(name) as object) } : undefined),
+      clear: async (name: string) => alarms.delete(name),
+      onAlarm: { addListener: (l: Listener) => alarmListeners.push(l) },
     },
     tabs: {
       query: async () => [],
@@ -94,11 +114,14 @@ async function loadBackground(): Promise<Harness> {
     crypto: { randomUUID: () => `uuid-${++uuid}` },
     console,
     setTimeout: (fn: () => void, delay: number) => {
-      const handle = timers.length + 1;
-      timers.push({ delay, fn });
-      return handle;
+      const id = ++timerId;
+      timers.push({ id, delay, fn });
+      return id;
     },
-    clearTimeout: () => {},
+    clearTimeout: (id: number | undefined) => {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i >= 0) timers.splice(i, 1);
+    },
     Promise,
     Math,
     Number,
@@ -118,14 +141,29 @@ async function loadBackground(): Promise<Harness> {
       return connectNativeCalls;
     },
     timers,
+    backoffTimers: () => timers.filter((t) => t.delay !== 10_000),
+    alarms,
+    fireAlarm: async (name: string) => {
+      alarmListeners.forEach((l) => l({ name }));
+      await flush();
+    },
+    runStableTimer: async () => {
+      const i = timers.findIndex((t) => t.delay === 10_000);
+      if (i < 0) throw new Error("no stable timer");
+      const [timer] = timers.splice(i, 1);
+      timer.fn();
+      await flush();
+    },
     currentPort: () => ports[ports.length - 1],
     offscreenClosed: () => offscreenClosed,
+    offscreenCreated: () => offscreenCreated,
     debuggerAttached: () => attached,
     debuggerDetached: () => detached,
     flush,
     runNextTimer: async () => {
-      const timer = timers.shift();
-      if (!timer) throw new Error("no pending timer");
+      const i = timers.findIndex((t) => t.delay !== 10_000);
+      if (i < 0) throw new Error("no pending timer");
+      const [timer] = timers.splice(i, 1);
       timer.fn();
       await flush();
     },
@@ -149,8 +187,8 @@ describe("extension native reconnect backoff (real background.js)", () => {
     for (let cycle = 0; cycle < 5; cycle++) {
       h.currentPort()!.onDisconnect.fire();
       await h.flush();
-      if (h.timers.length > 0) {
-        observedDelays.push(h.timers[0].delay);
+      if (h.backoffTimers().length > 0) {
+        observedDelays.push(h.backoffTimers()[0].delay);
         await h.runNextTimer();
       }
     }
@@ -158,17 +196,82 @@ describe("extension native reconnect backoff (real background.js)", () => {
     expect(observedDelays).toEqual([1000, 2000, 2000, 2000]);
     expect(h.offscreenClosed()).toBe(1);
     expect(h.timers.length).toBe(0);
+    expect(h.alarms.get("agent-hands-reconnect")).toEqual({ periodInMinutes: 1 });
   });
 
-  it("resets backoff to the minimum only after a successful host message", async () => {
+  it("keeps retrying once per alarm after the cap and clears the alarm once a connection holds", async () => {
+    for (let cycle = 0; cycle < 5; cycle++) {
+      h.currentPort()!.onDisconnect.fire();
+      await h.flush();
+      if (h.backoffTimers().length > 0) await h.runNextTimer();
+    }
+    expect(h.alarms.has("agent-hands-reconnect")).toBe(true);
+    const calls = h.connectNativeCalls;
+
+    await h.fireAlarm("agent-hands-reconnect");
+    expect(h.connectNativeCalls).toBe(calls + 1);
     h.currentPort()!.onDisconnect.fire();
     await h.flush();
-    expect(h.timers[0].delay).toBe(1000);
+    expect(h.backoffTimers()).toEqual([]);
+    expect(h.alarms.has("agent-hands-reconnect")).toBe(true);
+
+    await h.fireAlarm("agent-hands-reconnect");
+    expect(h.connectNativeCalls).toBe(calls + 2);
+    await h.runStableTimer();
+    expect(h.alarms.has("agent-hands-reconnect")).toBe(false);
+
+    h.currentPort()!.onDisconnect.fire();
+    await h.flush();
+    expect(h.backoffTimers().map((t) => t.delay)).toEqual([1000]);
+  });
+
+  it("stays in alarm retry mode when the service worker restarts with the alarm still set", async () => {
+    const restarted = await loadBackground(new Map([["agent-hands-reconnect", { periodInMinutes: 1 }]]));
+    await restarted.flush();
+    expect(restarted.connectNativeCalls).toBe(1);
+
+    restarted.currentPort()!.onDisconnect.fire();
+    await restarted.flush();
+    expect(restarted.backoffTimers()).toEqual([]);
+    expect(restarted.alarms.has("agent-hands-reconnect")).toBe(true);
+
+    await restarted.fireAlarm("agent-hands-reconnect");
+    expect(restarted.connectNativeCalls).toBe(2);
+    await restarted.runStableTimer();
+    expect(restarted.alarms.has("agent-hands-reconnect")).toBe(false);
+  });
+
+  it("creates one offscreen document and one connection when an alarm wakes a stopped worker", async () => {
+    const woken = await loadBackground(new Map([["agent-hands-reconnect", { periodInMinutes: 1 }]]));
+    await woken.fireAlarm("agent-hands-reconnect");
+    expect(woken.offscreenCreated()).toBe(1);
+    expect(woken.connectNativeCalls).toBe(1);
+  });
+
+  it("resets the attempt count after a connection stays up, without any host message", async () => {
+    for (let cycle = 0; cycle < 4; cycle++) {
+      h.currentPort()!.onDisconnect.fire();
+      await h.flush();
+      await h.runNextTimer();
+    }
+    await h.runStableTimer();
+
+    h.currentPort()!.onDisconnect.fire();
+    await h.flush();
+    expect(h.backoffTimers().map((t) => t.delay)).toEqual([1000]);
+    expect(h.offscreenClosed()).toBe(0);
+    expect(h.alarms.size).toBe(0);
+  });
+
+  it("resets backoff to the minimum after a successful host message", async () => {
+    h.currentPort()!.onDisconnect.fire();
+    await h.flush();
+    expect(h.backoffTimers()[0].delay).toBe(1000);
     await h.runNextTimer();
 
     h.currentPort()!.onDisconnect.fire();
     await h.flush();
-    expect(h.timers[0].delay).toBe(2000);
+    expect(h.backoffTimers()[0].delay).toBe(2000);
     await h.runNextTimer();
 
     h.currentPort()!.onMessage.fire({ id: "x", kind: "control", op: "listTabs" });
@@ -176,7 +279,7 @@ describe("extension native reconnect backoff (real background.js)", () => {
 
     h.currentPort()!.onDisconnect.fire();
     await h.flush();
-    expect(h.timers[0].delay).toBe(1000);
+    expect(h.backoffTimers()[0].delay).toBe(1000);
   });
 
   it("routes separate controllers to separate tabs and rejects a second controller for the same tab", async () => {

@@ -2,11 +2,14 @@ const sessions = new Map();
 const tabOwners = new Map();
 let nativePort;
 let nativeTimer;
+let stableTimer;
 let nativeAttempts = 0;
 
 const NATIVE_BACKOFF_MIN_MS = 1000;
 const NATIVE_BACKOFF_MAX_MS = 2000;
 const MAX_NATIVE_ATTEMPTS = 5;
+const NATIVE_STABLE_MS = 10_000;
+const RECONNECT_ALARM = "agent-hands-reconnect";
 let nativeBackoff = NATIVE_BACKOFF_MIN_MS;
 
 async function ensureOffscreen() {
@@ -25,22 +28,39 @@ async function closeBrowserSession() {
   await chrome.offscreen.closeDocument().catch(() => {});
 }
 
+function nativeConnected() {
+  void chrome.alarms.clear(RECONNECT_ALARM);
+  nativeAttempts = 0;
+  nativeBackoff = NATIVE_BACKOFF_MIN_MS;
+}
+
 function connectNative() {
   if (nativePort || nativeTimer) return;
   const port = chrome.runtime.connectNative("com.zmerchant.agenthands");
   nativePort = port;
+  let stable = false;
+  const markStable = () => {
+    if (stable) return;
+    stable = true;
+    clearTimeout(stableTimer);
+    stableTimer = undefined;
+    nativeConnected();
+  };
+  stableTimer = setTimeout(markStable, NATIVE_STABLE_MS);
   port.onMessage.addListener((message) => {
-    nativeAttempts = 0;
-    nativeBackoff = NATIVE_BACKOFF_MIN_MS;
+    markStable();
     void handle(message);
   });
   port.onDisconnect.addListener(() => {
     chrome.runtime.lastError?.message;
     if (nativePort !== port) return;
     nativePort = undefined;
+    clearTimeout(stableTimer);
+    stableTimer = undefined;
     nativeAttempts += 1;
     if (nativeAttempts >= MAX_NATIVE_ATTEMPTS) {
       void closeBrowserSession();
+      chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 });
       return;
     }
     if (nativeTimer) return;
@@ -126,8 +146,8 @@ async function handle(message) {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-hands-offscreen") return;
-  port.onMessage.addListener(() => connectNative());
-  connectNative();
+  port.onMessage.addListener(() => void restored.then(connectNative));
+  void restored.then(connectNative);
 });
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -144,4 +164,20 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   }
 });
 
-void ensureOffscreen().then(connectNative);
+const restored = chrome.alarms.get(RECONNECT_ALARM).then((alarm) => {
+  if (alarm) nativeAttempts = MAX_NATIVE_ATTEMPTS;
+});
+
+let reconnecting;
+
+function reconnect() {
+  reconnecting ??= restored.then(ensureOffscreen).then(connectNative).catch(() => {}).finally(() => {
+    reconnecting = undefined;
+  });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) reconnect();
+});
+
+reconnect();
