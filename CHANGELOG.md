@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.1...agent-hands-v0.7.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **extension:** keep reconnecting to the native host instead of giving up ([#44](https://github.com/zm2231/agent-hands/issues/44)) ([ab1acb0](https://github.com/zm2231/agent-hands/commit/ab1acb0ca86ef8ce2bba2715fe9855e5d85f5dcb))
+
 ## [0.7.1](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.0...agent-hands-v0.7.1) (2026-10-11)
 
 
