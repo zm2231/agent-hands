@@ -2,11 +2,14 @@ const sessions = new Map();
 const tabOwners = new Map();
 let nativePort;
 let nativeTimer;
+let stableTimer;
 let nativeAttempts = 0;
 
 const NATIVE_BACKOFF_MIN_MS = 1000;
 const NATIVE_BACKOFF_MAX_MS = 2000;
 const MAX_NATIVE_ATTEMPTS = 5;
+const NATIVE_STABLE_MS = 10_000;
+const RECONNECT_ALARM = "agent-hands-reconnect";
 let nativeBackoff = NATIVE_BACKOFF_MIN_MS;
 
 async function ensureOffscreen() {
@@ -25,22 +28,39 @@ async function closeBrowserSession() {
   await chrome.offscreen.closeDocument().catch(() => {});
 }
 
+function nativeConnected() {
+  void chrome.alarms.clear(RECONNECT_ALARM);
+  nativeAttempts = 0;
+  nativeBackoff = NATIVE_BACKOFF_MIN_MS;
+}
+
 function connectNative() {
   if (nativePort || nativeTimer) return;
   const port = chrome.runtime.connectNative("com.zmerchant.agenthands");
   nativePort = port;
+  let stable = false;
+  const markStable = () => {
+    if (stable) return;
+    stable = true;
+    clearTimeout(stableTimer);
+    stableTimer = undefined;
+    nativeConnected();
+  };
+  stableTimer = setTimeout(markStable, NATIVE_STABLE_MS);
   port.onMessage.addListener((message) => {
-    nativeAttempts = 0;
-    nativeBackoff = NATIVE_BACKOFF_MIN_MS;
+    markStable();
     void handle(message);
   });
   port.onDisconnect.addListener(() => {
     chrome.runtime.lastError?.message;
     if (nativePort !== port) return;
     nativePort = undefined;
+    clearTimeout(stableTimer);
+    stableTimer = undefined;
     nativeAttempts += 1;
     if (nativeAttempts >= MAX_NATIVE_ATTEMPTS) {
       void closeBrowserSession();
+      chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 });
       return;
     }
     if (nativeTimer) return;
@@ -142,6 +162,10 @@ chrome.debugger.onDetach.addListener((source, reason) => {
       send({ kind: "detached", controllerId: session.controllerId, sessionId, tabId: session.tabId, params: { reason } });
     }
   }
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) void ensureOffscreen().then(connectNative);
 });
 
 void ensureOffscreen().then(connectNative);
