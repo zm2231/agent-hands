@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.4](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.3...agent-hands-v0.7.4) (2026-11-09)
+
+
+### Bug Fixes
+
+* **desktop:** let Computer Use find codex when ChatGPT is closed ([#49](https://github.com/zm2231/agent-hands/issues/49)) ([f2a00d7](https://github.com/zm2231/agent-hands/commit/f2a00d758276290e19e710c6695c81bba90d2e8e))
+
 ## [0.7.3](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.2...agent-hands-v0.7.3) (2026-11-09)
 
 
