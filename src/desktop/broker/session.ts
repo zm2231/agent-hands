@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMPUTER_USE_PLUGIN_ROOT, type BrokerComponents } from "./verify.js";
 import { validateOfficialToolInventory } from "./official-schemas.js";
@@ -131,7 +131,7 @@ export class BrokerSession {
         HOME: this.tempRoot,
         CODEX_HOME: codexHome,
         TMPDIR: this.tempRoot,
-        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH: `${dirname(this.components.codexPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
         NO_COLOR: "1",
         CLICOLOR: "0",
       };
