@@ -12,7 +12,7 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
 const execFileAsync = promisify(execFile);
 
-const liveBrokerProcesses = new Map<ChildProcess, Set<number>>();
+const liveBrokerProcesses = new Set<ChildProcess>();
 let stopping = false;
 
 const running = (proc: ChildProcess) => proc.exitCode === null && proc.signalCode === null;
@@ -23,13 +23,10 @@ function killNow(proc: ChildProcess): void {
   try { process.kill(-pid, "SIGKILL"); } catch {
     try { proc.kill("SIGKILL"); } catch { /* exited */ }
   }
-  for (const child of liveBrokerProcesses.get(proc) ?? []) {
-    try { process.kill(child, "SIGKILL"); } catch { /* exited */ }
-  }
 }
 
 export function trackBrokerProcess(proc: ChildProcess): void {
-  liveBrokerProcesses.set(proc, new Set());
+  liveBrokerProcesses.add(proc);
   const untrack = () => liveBrokerProcesses.delete(proc);
   proc.once("exit", untrack);
   proc.once("close", untrack);
@@ -42,28 +39,9 @@ export function trackedBrokerProcessCount(): number {
 
 export function killAllBrokerProcessesNow(): void {
   stopping = true;
-  for (const proc of liveBrokerProcesses.keys()) killNow(proc);
+  for (const proc of liveBrokerProcesses) killNow(proc);
 }
 
-async function childPids(parent: number): Promise<number[]> {
-  try {
-    const { stdout } = await execFileAsync("/usr/bin/pgrep", ["-P", String(parent)], { timeout: 2000 });
-    return stdout.trim().split(/\s+/).map(Number).filter((c) => Number.isSafeInteger(c) && c > 1);
-  } catch {
-    return [];
-  }
-}
-
-async function recordDescendants(proc: ChildProcess): Promise<void> {
-  const known = liveBrokerProcesses.get(proc);
-  if (!known || !proc.pid) return;
-  const queue = [proc.pid];
-  while (queue.length > 0 && known.size < 256) {
-    for (const c of await childPids(queue.shift()!)) {
-      if (!known.has(c)) { known.add(c); queue.push(c); }
-    }
-  }
-}
 const MAX_RESULT_BYTES = 25 * 1024 * 1024;
 
 interface CallOptions {
@@ -241,7 +219,6 @@ export class BrokerSession {
       if (!cuServer) throw new Error("Inventory missing computer-use server.");
 
       validateOfficialToolInventory(cuServer.tools);
-      await recordDescendants(this.proc);
     } catch (err) {
       await this.close();
       throw err;
@@ -343,7 +320,7 @@ export class BrokerSession {
     const pid = proc?.pid;
     if (!proc || !pid) return;
 
-    const known = new Set(liveBrokerProcesses.get(proc) ?? []);
+    const known = new Set<number>();
     killNow(proc);
 
     const pExists = (p: number) => { try { process.kill(p, 0); return true; } catch { return false; } };
@@ -357,10 +334,8 @@ export class BrokerSession {
       }
     };
 
-    for (let pass = 0; pass < 2; pass++) {
-      for (const p of await holdersOfWorkDir()) { known.add(p); try { process.kill(p, "SIGKILL"); } catch {} }
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await new Promise((r) => setTimeout(r, 50));
+    for (const p of await holdersOfWorkDir()) { known.add(p); try { process.kill(p, "SIGKILL"); } catch {} }
 
     for (let elapsed = 0; elapsed < 1500; elapsed += 25) {
       if (!running(proc) && [...known].every((c) => !pExists(c))) break;

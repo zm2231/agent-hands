@@ -110,6 +110,18 @@ describe("broker teardown", () => {
       rmSync(tmp, { recursive: true, force: true });
     }, 30_000);
 
+    it("leaves neither codex nor its client alive when SIGKILL immediately follows SIGTERM", async () => {
+      const { server, codex, tmp } = await startWithDesktopSession();
+      const client = Number(spawnSync("pgrep", ["-P", String(codex)], { encoding: "utf8" }).stdout.trim().split(/\s+/)[0]);
+      expect(client).toBeGreaterThan(0);
+      server.kill("SIGTERM");
+      server.kill("SIGKILL");
+      const gone = await waitFor(() => !alive(codex) && !alive(client), 3000);
+      if (!gone) for (const p of [codex, client]) { try { process.kill(p, "SIGKILL"); } catch {} }
+      expect(gone).toBe(true);
+      rmSync(tmp, { recursive: true, force: true });
+    }, 30_000);
+
     it("leaves no stopped codex behind when SIGKILL follows SIGTERM", async () => {
       const { server, codex, tmp } = await startWithDesktopSession();
       server.kill("SIGTERM");
