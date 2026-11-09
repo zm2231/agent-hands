@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+export const CODEX_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 const EXPECTED_TEAM_ID = "2DC432GLL2";
 const CODESIGN_TIMEOUT = 10_000;
 
