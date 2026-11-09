@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.2...agent-hands-v0.7.3) (2026-11-09)
+
+
+### Bug Fixes
+
+* **desktop:** stop leaving frozen codex processes behind on shutdown ([#47](https://github.com/zm2231/agent-hands/issues/47)) ([dd6d8b7](https://github.com/zm2231/agent-hands/commit/dd6d8b71544ba6732056a8efd5c5c38dcf08c199))
+
 ## [0.7.2](https://github.com/zm2231/agent-hands/compare/agent-hands-v0.7.1...agent-hands-v0.7.2) (2026-10-14)
 
 
