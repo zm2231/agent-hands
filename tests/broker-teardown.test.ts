@@ -85,6 +85,18 @@ describe("broker teardown", () => {
   const live = describe.runIf(process.platform === "darwin" && existsSync(CODEX_PATH));
 
   live("with a live desktop session", () => {
+    it("lets Computer Use resolve codex on PATH to the verified binary", async () => {
+      const { server, codex, tmp, exited } = await startWithDesktopSession();
+      const command = spawnSync("ps", ["-wwE", "-o", "command=", "-p", String(codex)], { encoding: "utf8" }).stdout;
+      const path = command.match(/(?:^| )PATH=(\S+)/)?.[1];
+      expect(path).toBeDefined();
+      const resolved = spawnSync("/usr/bin/env", ["-i", `PATH=${path}`, "/usr/bin/which", "codex"], { encoding: "utf8" }).stdout.trim();
+      expect(resolved).toBe(CODEX_PATH);
+      server.stdin!.end();
+      await exited;
+      rmSync(tmp, { recursive: true, force: true });
+    }, 30_000);
+
     it("exits and kills codex when stdin closes", async () => {
       const { server, codex, tmp, exited } = await startWithDesktopSession();
       server.stdin!.end();
