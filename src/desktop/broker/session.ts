@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +8,25 @@ import type { ContentBlock } from "../../kernel/types.js";
 import { runningVersion } from "../../version.js";
 
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
+
+const liveBrokerProcesses = new Set<ChildProcess>();
+
+function killGroupNow(proc: ChildProcess): void {
+  const pid = proc.pid;
+  if (!pid) return;
+  try { process.kill(-pid, "SIGKILL"); } catch {
+    try { proc.kill("SIGKILL"); } catch { /* exited */ }
+  }
+}
+
+export function trackBrokerProcess(proc: ChildProcess): void {
+  liveBrokerProcesses.add(proc);
+  proc.once("exit", () => liveBrokerProcesses.delete(proc));
+}
+
+export function killAllBrokerProcessesNow(): void {
+  for (const proc of liveBrokerProcesses) killGroupNow(proc);
+}
 const MAX_RESULT_BYTES = 25 * 1024 * 1024;
 
 interface CallOptions {
@@ -135,6 +154,7 @@ export class BrokerSession {
         [...configArgs, "app-server", "--stdio"],
         { cwd: this.workDir, env, stdio: ["pipe", "pipe", "pipe"], detached: true, shell: false }
       );
+      trackBrokerProcess(this.proc);
 
       this.proc.stdin?.on("error", (err: NodeJS.ErrnoException) => {
         if (err.code !== "EPIPE") this.close().catch(() => {});
@@ -290,7 +310,6 @@ export class BrokerSession {
     const pid = proc?.pid;
     if (!proc || !pid) return;
 
-    const { spawnSync } = await import("node:child_process");
     const pExists = (p: number) => { try { process.kill(p, 0); return true; } catch { return false; } };
     const pgExists = (p: number) => { try { process.kill(-p, 0); return true; } catch { return false; } };
 
@@ -320,40 +339,16 @@ export class BrokerSession {
       return pids;
     };
 
-    // Enumerate descendants.
-    const descendants = new Set<number>();
-    for (const c of collectDescendants(pid)) descendants.add(c);
-    for (const c of collectByCwd()) descendants.add(c);
-
-    // SIGSTOP the process group to freeze spawning.
-    try { process.kill(-pid, "SIGSTOP"); } catch {
-      try { proc.kill("SIGSTOP"); } catch { /* exited */ }
-    }
-
-    // Stabilize: re-enumerate up to 16 passes.
-    for (let pass = 0; pass < 16; pass++) {
-      let added = false;
-      for (const c of collectDescendants(pid)) {
-        if (!descendants.has(c)) { descendants.add(c); added = true; try { process.kill(c, "SIGSTOP"); } catch {} }
-      }
-      for (const c of collectByCwd()) {
-        if (!descendants.has(c)) { descendants.add(c); added = true; try { process.kill(c, "SIGSTOP"); } catch {} }
-      }
-      if (!added && pass > 0) break;
-      await new Promise((r) => setTimeout(r, 10));
-    }
-
-    // SIGKILL everything.
+    // List children before the kill (they lose their parent link after it), and kill before any await.
+    const descendants = collectDescendants(pid);
+    killGroupNow(proc);
     for (const c of descendants) { try { process.kill(c, "SIGKILL"); } catch {} }
-    try { process.kill(-pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch {} }
 
-    // Post-kill sweep.
     for (let pass = 0; pass < 2; pass++) {
       await new Promise((r) => setTimeout(r, 25));
-      for (const c of collectByCwd()) { try { process.kill(c, "SIGKILL"); } catch {} }
+      for (const c of collectByCwd()) { descendants.add(c); try { process.kill(c, "SIGKILL"); } catch {} }
     }
 
-    // Wait for exit (up to 1.5s).
     for (let elapsed = 0; elapsed < 1500; elapsed += 25) {
       if (!pgExists(pid) && [...descendants].every((c) => !pExists(c))) break;
       await new Promise((r) => setTimeout(r, 25));
