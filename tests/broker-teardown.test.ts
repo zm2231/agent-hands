@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { killAllBrokerProcessesNow, trackBrokerProcess } from "../src/desktop/broker/session.js";
+import { killAllBrokerProcessesNow, trackBrokerProcess, trackedBrokerProcessCount } from "../src/desktop/broker/session.js";
 import { CODEX_PATH } from "../src/desktop/broker/verify.js";
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -32,6 +32,22 @@ describe("broker teardown", () => {
     killAllBrokerProcessesNow();
 
     expect(await waitFor(() => !alive(proc.pid!) && !alive(child))).toBe(true);
+  });
+
+  it("kills a process tracked after shutdown began", async () => {
+    killAllBrokerProcessesNow();
+    const proc = spawn("/bin/sleep", ["60"], { detached: true, stdio: "ignore" });
+    trackBrokerProcess(proc);
+    expect(await waitFor(() => !alive(proc.pid!))).toBe(true);
+  });
+
+  it("forgets a process whose spawn failed", async () => {
+    const before = trackedBrokerProcessCount();
+    const proc = spawn("/nonexistent/agent-hands-test", [], { stdio: "ignore" });
+    proc.on("error", () => {});
+    trackBrokerProcess(proc);
+    await new Promise((r) => proc.once("close", r));
+    expect(trackedBrokerProcessCount()).toBe(before);
   });
 
   const entry = join(__dirname, "..", "dist", "index.js");
@@ -76,6 +92,21 @@ describe("broker teardown", () => {
       if (!done) server.kill("SIGKILL");
       expect(done).toBe(true);
       expect(await waitFor(() => !alive(codex))).toBe(true);
+      rmSync(tmp, { recursive: true, force: true });
+    }, 30_000);
+
+    it("kills a process holding the work directory in its own group before removing the directory", async () => {
+      const { server, codex, tmp, exited } = await startWithDesktopSession();
+      const workDir = spawnSync("/usr/sbin/lsof", ["-a", "-p", String(codex), "-d", "cwd", "-Fn"], { encoding: "utf8" })
+        .stdout.split("\n").find((l) => l.startsWith("n"))!.slice(1);
+      const holder = spawn("/bin/sleep", ["60"], { cwd: workDir, detached: true, stdio: "ignore" });
+      holder.unref();
+      server.stdin!.end();
+      await exited;
+      const killed = await waitFor(() => !alive(holder.pid!), 3000);
+      if (!killed) holder.kill("SIGKILL");
+      expect(killed).toBe(true);
+      expect(existsSync(workDir)).toBe(false);
       rmSync(tmp, { recursive: true, force: true });
     }, 30_000);
 

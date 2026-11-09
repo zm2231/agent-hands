@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,23 +10,59 @@ import { runningVersion } from "../../version.js";
 
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
-const liveBrokerProcesses = new Set<ChildProcess>();
+const execFileAsync = promisify(execFile);
 
-function killGroupNow(proc: ChildProcess): void {
+const liveBrokerProcesses = new Map<ChildProcess, Set<number>>();
+let stopping = false;
+
+const running = (proc: ChildProcess) => proc.exitCode === null && proc.signalCode === null;
+
+function killNow(proc: ChildProcess): void {
   const pid = proc.pid;
-  if (!pid) return;
+  if (!pid || !running(proc)) return;
   try { process.kill(-pid, "SIGKILL"); } catch {
     try { proc.kill("SIGKILL"); } catch { /* exited */ }
+  }
+  for (const child of liveBrokerProcesses.get(proc) ?? []) {
+    try { process.kill(child, "SIGKILL"); } catch { /* exited */ }
   }
 }
 
 export function trackBrokerProcess(proc: ChildProcess): void {
-  liveBrokerProcesses.add(proc);
-  proc.once("exit", () => liveBrokerProcesses.delete(proc));
+  liveBrokerProcesses.set(proc, new Set());
+  const untrack = () => liveBrokerProcesses.delete(proc);
+  proc.once("exit", untrack);
+  proc.once("close", untrack);
+  if (stopping) killNow(proc);
+}
+
+export function trackedBrokerProcessCount(): number {
+  return liveBrokerProcesses.size;
 }
 
 export function killAllBrokerProcessesNow(): void {
-  for (const proc of liveBrokerProcesses) killGroupNow(proc);
+  stopping = true;
+  for (const proc of liveBrokerProcesses.keys()) killNow(proc);
+}
+
+async function childPids(parent: number): Promise<number[]> {
+  try {
+    const { stdout } = await execFileAsync("/usr/bin/pgrep", ["-P", String(parent)], { timeout: 2000 });
+    return stdout.trim().split(/\s+/).map(Number).filter((c) => Number.isSafeInteger(c) && c > 1);
+  } catch {
+    return [];
+  }
+}
+
+async function recordDescendants(proc: ChildProcess): Promise<void> {
+  const known = liveBrokerProcesses.get(proc);
+  if (!known || !proc.pid) return;
+  const queue = [proc.pid];
+  while (queue.length > 0 && known.size < 256) {
+    for (const c of await childPids(queue.shift()!)) {
+      if (!known.has(c)) { known.add(c); queue.push(c); }
+    }
+  }
 }
 const MAX_RESULT_BYTES = 25 * 1024 * 1024;
 
@@ -149,6 +186,7 @@ export class BrokerSession {
       // Ensure SkyComputerUseService is running for cursor overlay.
       await BrokerSession.ensureCUAService();
 
+      if (stopping) throw new Error("agent-hands is shutting down.");
       this.proc = spawn(
         this.components.codexPath,
         [...configArgs, "app-server", "--stdio"],
@@ -160,13 +198,7 @@ export class BrokerSession {
         if (err.code !== "EPIPE") this.close().catch(() => {});
       });
       this.proc.once("error", () => this.close().catch(() => {}));
-      this.proc.once("close", () => {
-        this.closed = true;
-        this.cleanup().catch(() => {});
-        const cb = this._onClose;
-        this._onClose = null;
-        cb?.();
-      });
+      this.proc.once("close", () => { this.close().catch(() => {}); });
       this.proc.stderr?.setEncoding("utf8");
       this.proc.stderr?.on("data", () => {});
 
@@ -209,6 +241,7 @@ export class BrokerSession {
       if (!cuServer) throw new Error("Inventory missing computer-use server.");
 
       validateOfficialToolInventory(cuServer.tools);
+      await recordDescendants(this.proc);
     } catch (err) {
       await this.close();
       throw err;
@@ -310,47 +343,27 @@ export class BrokerSession {
     const pid = proc?.pid;
     if (!proc || !pid) return;
 
+    const known = new Set(liveBrokerProcesses.get(proc) ?? []);
+    killNow(proc);
+
     const pExists = (p: number) => { try { process.kill(p, 0); return true; } catch { return false; } };
-    const pgExists = (p: number) => { try { process.kill(-p, 0); return true; } catch { return false; } };
-
-    const collectDescendants = (root: number): Set<number> => {
-      const found = new Set<number>();
-      const queue = [root];
-      while (queue.length > 0 && found.size < 256) {
-        const parent = queue.shift()!;
-        const r = spawnSync("/usr/bin/pgrep", ["-P", String(parent)], { encoding: "utf8", timeout: 2000 });
-        if (r.error || (r.status !== 0 && r.status !== 1)) continue;
-        for (const tok of (r.stdout ?? "").trim().split(/\s+/)) {
-          const c = Number(tok);
-          if (Number.isSafeInteger(c) && c > 1 && c !== root && !found.has(c)) { found.add(c); queue.push(c); }
-        }
+    const holdersOfWorkDir = async (): Promise<number[]> => {
+      if (!this.workDir) return [];
+      try {
+        const { stdout } = await execFileAsync("/usr/sbin/lsof", ["-a", "-d", "cwd", "+d", this.workDir, "-Fp"], { timeout: 3000 });
+        return [...stdout.matchAll(/^p(\d+)$/gm)].map((m) => Number(m[1])).filter((p) => p > 1 && p !== process.pid);
+      } catch {
+        return [];
       }
-      return found;
     };
-
-    const collectByCwd = (): Set<number> => {
-      if (!this.workDir) return new Set();
-      const r = spawnSync("/usr/sbin/lsof", ["-a", "-d", "cwd", "+d", this.workDir, "-Fp"], { encoding: "utf8", timeout: 3000 });
-      const pids = new Set<number>();
-      for (const line of (r.stdout ?? "").split("\n")) {
-        const m = line.match(/^p(\d+)$/);
-        if (m) { const p = Number(m[1]); if (Number.isSafeInteger(p) && p > 1 && p !== process.pid) pids.add(p); }
-      }
-      return pids;
-    };
-
-    // List children before the kill (they lose their parent link after it), and kill before any await.
-    const descendants = collectDescendants(pid);
-    killGroupNow(proc);
-    for (const c of descendants) { try { process.kill(c, "SIGKILL"); } catch {} }
 
     for (let pass = 0; pass < 2; pass++) {
+      for (const p of await holdersOfWorkDir()) { known.add(p); try { process.kill(p, "SIGKILL"); } catch {} }
       await new Promise((r) => setTimeout(r, 25));
-      for (const c of collectByCwd()) { descendants.add(c); try { process.kill(c, "SIGKILL"); } catch {} }
     }
 
     for (let elapsed = 0; elapsed < 1500; elapsed += 25) {
-      if (!pgExists(pid) && [...descendants].every((c) => !pExists(c))) break;
+      if (!running(proc) && [...known].every((c) => !pExists(c))) break;
       await new Promise((r) => setTimeout(r, 25));
     }
   }
